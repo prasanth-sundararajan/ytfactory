@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Print the Google OAuth authorization URL for the YouTube scopes.
+set -euo pipefail
+
+set -a
+# shellcheck disable=SC1091
+. /opt/ytfactory/.env
+set +a
+
+exec python3 - <<'PY'
+import os
+import urllib.parse
+
+params = {
+    "client_id": os.environ["YT_CLIENT_ID"],
+    "redirect_uri": "http://localhost",
+    "response_type": "code",
+    "scope": " ".join([
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "https://www.googleapis.com/auth/yt-analytics.readonly",
+    ]),
+    "access_type": "offline",
+    "prompt": "consent",
+    "include_granted_scopes": "true",
+    "state": "ytf",
+}
+print("https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params))
+PY

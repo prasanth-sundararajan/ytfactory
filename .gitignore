@@ -1,0 +1,24 @@
+# Secrets
+.env
+*.env
+.env.*
+!*.env.example
+
+# Runtime data & media
+data/
+work/
+logs/
+worker/data/
+worker/work/
+worker/logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp

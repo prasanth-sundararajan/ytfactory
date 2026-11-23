@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Exchange an authorization code for a refresh token, store it, and verify the channel.
+# usage: oauth-finish '<code>'
+set -euo pipefail
+
+CODE="${1:-}"
+if [ -z "$CODE" ]; then
+  echo "usage: oauth-finish '<code from the browser address bar>'" >&2
+  exit 1
+fi
+
+# Users often paste the whole redirect URL. Keep only the code value.
+CODE="${CODE#*code=}"
+CODE="${CODE%%&*}"
+
+set -a
+# shellcheck disable=SC1091
+. /opt/ytfactory/.env
+set +a
+
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+HTTP=$(curl -s -o "$TMP" -w '%{http_code}' --max-time 30 \
+  -X POST https://oauth2.googleapis.com/token \
+  -d "client_id=${YT_CLIENT_ID}" \
+  -d "client_secret=${YT_CLIENT_SECRET}" \
+  -d "code=${CODE}" \
+  -d "grant_type=authorization_code" \
+  -d "redirect_uri=http://localhost")
+
+python3 - "$TMP" "$HTTP" <<'PY'
+import json
+import pathlib
+import sys
+
+path, http = sys.argv[1], sys.argv[2]
+raw = pathlib.Path(path).read_text()
+
+try:
+    d = json.loads(raw)
+except Exception:
+    print("FAILED: non-JSON response (HTTP %s)" % http)
+    print(raw[:300])
+    raise SystemExit(1)
+
+if "error" in d:
+    print("FAILED:", d.get("error"), "|", str(d.get("error_description", ""))[:160])
+    hints = {
+        "invalid_grant": "code expired (10 min) or already used - run oauth-url again",
+        "redirect_uri_mismatch": "client is not a Desktop app type",
+        "invalid_client": "client id/secret do not match",
+    }
+    if d.get("error") in hints:
+        print("hint  :", hints[d["error"]])
+    raise SystemExit(1)
+
+refresh = d.get("refresh_token")
+if not refresh:
+    print("FAILED: no refresh_token returned (re-run oauth-url with prompt=consent)")
+    raise SystemExit(1)
+
+scope = d.get("scope", "")
+print("refresh token : %d chars  (stored, not shown)" % len(refresh))
+print("access token  : %d chars" % len(d.get("access_token", "")))
+print("scopes granted: %s" % scope)
+
+required = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
+missing = [s for s in required if s not in scope.split()]
+if missing:
+    print("WARNING - missing scopes:", ", ".join(missing))
+else:
+    print("all 3 required scopes granted")
+
+env = pathlib.Path("/opt/ytfactory/.env")
+lines = [ln for ln in env.read_text().splitlines()
+         if not ln.startswith("YT_REFRESH_TOKEN=")]
+lines.append("YT_REFRESH_TOKEN=" + refresh)
+env.write_text("\n".join(lines) + "\n")
+env.chmod(0o600)
+print("written to /opt/ytfactory/.env (chmod 600)")
+PY
+
+echo
+echo "--- verifying the channel ---"
+set -a
+. /opt/ytfactory/.env
+set +a
+
+AT=$(curl -s --max-time 30 -X POST https://oauth2.googleapis.com/token \
+  -d "client_id=${YT_CLIENT_ID}" \
+  -d "client_secret=${YT_CLIENT_SECRET}" \
+  -d "refresh_token=${YT_REFRESH_TOKEN}" \
+  -d "grant_type=refresh_token" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+
+if [ -z "$AT" ]; then
+  echo "FAILED: could not mint an access token from the refresh token"
+  exit 1
+fi
+echo "access token minted from refresh token: OK"
+
+curl -s --max-time 30 \
+  "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true" \
+  -H "Authorization: Bearer ${AT}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+if "error" in d:
+    print("FAILED:", str(d["error"])[:200]); raise SystemExit(1)
+items = d.get("items", [])
+if not items:
+    print("FAILED: this Google account has no YouTube channel"); raise SystemExit(1)
+c = items[0]
+print("channel title :", c["snippet"]["title"])
+print("channel id    :", c["id"])
+st = c.get("statistics", {})
+print("subscribers   :", st.get("subscriberCount", "hidden"))
+print("videos        :", st.get("videoCount", "0"))
+'
