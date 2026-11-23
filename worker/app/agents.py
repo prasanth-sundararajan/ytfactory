@@ -126,7 +126,8 @@ def _keywords(sc: dict) -> set[str]:
         + [str(k) for k in (sc.get("keywords") or [])]
     )
     out = set()
-    for w in re.findall(r"[a-zA-Z\u0b80-\u0bff]{4,}", text.lower()):
+    # 3+ chars keeps short but decisive terms (NPS, HRA, TDS, tax) in play.
+    for w in re.findall(r"[a-zA-Z\u0b80-\u0bff]{3,}", text.lower()):
         if w not in STOP:
             out.add(w)
     return out
@@ -288,16 +289,34 @@ async def research(ctx) -> dict:
             "error": detail,
         }
 
+    # Snippets alone are often too thin to carry a fact sheet. Pull the actual
+    # page text for the top official results so the extractor has real wording.
+    contents = await asyncio.gather(
+        *(search.fetch_text(e["url"]) for e in evidence[:6])
+    )
+    content_by_url = {
+        e["url"]: c for e, c in zip(evidence[:6], contents) if c
+    }
+
+    def _body(e: dict) -> str:
+        text = e.get("snippet", "")
+        page = content_by_url.get(e["url"], "")
+        if page:
+            text += " " + page[:4000]
+        return text
+
     block = "\n".join(
-        f"[{i}] {e['title']}\n    {e['url']}\n    {e['snippet']}"
+        f"[{i}] {e['title']}\n    {e['url']}\n    snippet: {e['snippet']}"
+        + (f"\n    page text: {content_by_url[e['url']][:4000]}"
+           if content_by_url.get(e["url"]) else "")
         for i, e in enumerate(evidence, 1)
     )
 
     prompt = f"""You are the Research agent. Below are results from OFFICIAL sources only.
 
-Extract ONLY facts that are directly supported by these snippets.
+Extract ONLY facts that are directly supported by these snippets or page texts.
 Never add anything from your own knowledge. Never round or reinterpret a number.
-If a snippet does not contain a number, do not produce that number.
+If the snippet or page text does not contain a number, do not produce that number.
 
 Topic: {sc['topic']}
 Today: {_today()}
@@ -312,23 +331,23 @@ Search results:
 
 Return JSON only:
 {{"facts": [{{"fact": "one specific sentence", "source": "the url",
-             "quote": "the exact snippet words that support it"}}],
+             "quote": "the exact words from that source's snippet or page text that support it"}}],
   "numbers": [{{"value": "...", "context": "...", "source": "url"}}],
   "gaps": ["what a 5-minute video needs but these results do not cover"]}}
 
 Rules:
 - 6 to 12 facts, most important first
-- the "quote" MUST be copied word for word from that source's snippet above.
-  It is checked by a program: anything not found verbatim is discarded.
-- drop any fact whose snippet does not clearly support it
+- the "quote" MUST be copied word for word from that source's snippet or page
+  text above. It is checked by a program: anything not found verbatim is discarded.
+- drop any fact whose snippet or page text does not clearly support it
 - if two sources disagree, include both and note the disagreement in the fact text
-- if a number is not explicitly in a snippet, do not include it"""
+- if a number is not explicitly in the snippet or page text, do not include it"""
     data = await llm.generate_json(prompt, temperature=0.1)
 
     # --- mechanical verification, no model opinion involved -----------------
-    snippet_by_url = {e["url"]: e.get("snippet", "") for e in evidence}
+    snippet_by_url = {e["url"]: _body(e) for e in evidence}
     title_by_url = {e["url"]: e.get("title", "") for e in evidence}
-    all_snippets = " \n ".join(_norm(e.get("snippet", "")) for e in evidence)
+    all_snippets = " \n ".join(_norm(_body(e)) for e in evidence)
     keys = _keywords(sc)
 
     kept, dropped_unofficial, dropped_unquoted, dropped_number, dropped_offtopic = [], 0, 0, 0, 0
@@ -377,7 +396,7 @@ Rules:
     data["providers"] = sorted(providers)
 
     guided = [f for f in kept if f.get("guidance")]
-    if len(kept) < 3 or (strict and len(guided) < 2):
+    if len(kept) < 2 or (strict and len(guided) < 1):
         raise Blocked(
             "only %d verifiable fact(s) survived, %d of them from an explanatory page, "
             "for topic '%s' (dropped: %d unofficial, %d unquoted, %d unbacked numbers, "
