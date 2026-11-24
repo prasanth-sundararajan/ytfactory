@@ -121,10 +121,17 @@ async def run_pipeline(slug: str, kind: str = "long",
             ctx["media_error"] = str(e)[:600]
         db.save_script(video_id, ctx["out"])
 
+        try:
+            from app import guard
+            ctx["gate"] = await guard.repair(ctx)
+        except Exception as e:
+            log.warning("guardrail repair failed: %s", e)
+            ctx["gate"] = ["guardrail repair failed: " + str(e)[:120]]
+        db.save_script(video_id, ctx["out"])
         qc = ctx["out"].get("qc") or {}
         if ctx.get("media_error"):
             db.set_video_status(video_id, "render_failed")
-        elif qc.get("pass") and final.get("risk") == "low":
+        elif qc.get("pass") and final.get("risk") == "low" and not ctx.get("gate"):
             db.set_video_status(video_id, "ready")
         else:
             db.set_video_status(video_id, "needs_review")

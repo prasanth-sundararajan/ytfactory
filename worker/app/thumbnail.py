@@ -42,6 +42,8 @@ def _check(text: str, allowed: set[str]) -> str:
     low = t.lower()
     if any(e in low for e in packaging.ENDORSE):
         return "implies official endorsement"
+    if packaging.SITE.search(t):
+        return "contains website info"
     if any(h in low for h in packaging.HYPE):
         return "hype"
     for n in packaging._nums(t):
@@ -103,10 +105,11 @@ def compose(art: str, out: str, text: str, accent: str, badge: str, channel: str
             x += d.textlength(w_, font=f) + space
         y += int(size * 1.1)
 
-    bf = ImageFont.truetype(fp, 26)
-    bw = int(d.textlength(badge, font=bf)) + 32
-    d.rounded_rectangle([40, 30, 40 + bw, 74], radius=12, fill=(34, 197, 94))
-    d.text((56, 37), badge, font=bf, fill=(8, 24, 16))
+    if badge:
+        bf = ImageFont.truetype(fp, 26)
+        bw = int(d.textlength(badge, font=bf)) + 32
+        d.rounded_rectangle([40, 30, 40 + bw, 74], radius=12, fill=(34, 197, 94))
+        d.text((56, 37), badge, font=bf, fill=(8, 24, 16))
     cf = ImageFont.truetype(fp, 28)
     d.text((48, H - 56), channel, font=cf, fill=(220, 230, 245), stroke_width=2,
            stroke_fill=BLACK)
@@ -146,12 +149,17 @@ Return JSON only: {{"concepts": [{{"text": "...", "accent": "...", "scene": "...
         why = _check(str(c.get("text", "")), allowed)
         (rejected if why else concepts).append({**c, "rejected": why} if why else c)
 
+    from app import guard
+    fails = await guard.claim_fails([c["text"] for c in concepts], facts)
+    rejected += [{**c, "rejected": "overclaims: " + fails[c["text"]]}
+                 for c in concepts if c["text"] in fails]
+    concepts = [c for c in concepts if c["text"] not in fails]
     host = ""
     for f in facts:
         host = (urlparse(f.get("source", "")).hostname or "").replace("www.", "")
         if host:
             break
-    badge = ("Source: " + host) if host else "Public data"
+    badge = ""  # no site info in videos or thumbnails
     lang = "ta" if ch.get("language") == "ta" else "en"
     mdir = _media_dir(ctx)
 

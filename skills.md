@@ -100,6 +100,19 @@ Declared but not built: Leads (redirect links and attribution).
     approved", "endorsed by" and similar are rejected; the thumbnail badge reads
     "Source: <domain>"; endorsement phrases in the narration or description send the
     video to human review; images ban government emblems, seals and stamps.
+11. **No site info.** No website name, domain or URL (incometax.gov.in, rbi.org.in, www,
+    http) in the narration, headings, on-screen text, titles or thumbnails. Cite by
+    organisation only ("the Income Tax Department says"). Thumbnails carry no source badge.
+    Enforced in code for titles, thumbnail text, headings and narration.
+12. **No overclaiming titles.** A claim check (LLM judge against the verified facts) runs on
+    the main title, both Short titles and every thumbnail text. Promises like "avoid
+    notices" or "errors in your form" fail.
+13. **Final gate before Telegram (`guard.py`).** After QC, `repair()` fixes what it safely
+    can (Short titles become "<main title> (1/2)" and are re-rendered; failing thumbnail
+    variants are dropped), then `full_gate()` re-checks everything visible. Any remaining
+    problem: the preview arrives **without an Approve button** and the video is marked
+    needs_review. The Approve button re-runs the gate, so an old preview cannot bypass it.
+    The gate **fails closed**: if the claim check cannot run, the video is not approvable.
 
 ## 5. Image Studio (`imagegen.py`)
 

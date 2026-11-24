@@ -22,6 +22,24 @@ RELAX_LO, RELAX_HI = 13.0, 22.0  # only if no whole-sentence window fits the tar
 W, H = 1080, 1920
 
 
+def safe_title(main_t: str, i: int, limit: int = 70) -> str:
+    """Main title + (i/2), cut only at a word boundary. Never ends mid-word."""
+    main_t = " ".join(str(main_t or "Money basics").split())
+    tag = f" ({i}/2)"
+    if len(main_t) + len(tag) <= limit:
+        return main_t + tag
+    kept = ""
+    for w in main_t.split():
+        if len((kept + " " + w).strip()) + len(tag) > limit:
+            break
+        kept = (kept + " " + w).strip()
+    small = {"in", "of", "and", "to", "for", "the", "a", "an", "on", "with", "or", "your"}
+    words = kept.rstrip(" ,:;-").split()
+    while len(words) > 2 and words[-1].lower() in small:
+        words.pop()
+    return " ".join(words) + tag
+
+
 def beat_times(groups: list[list[dict]], durs: list[float]) -> list[dict]:
     """Actual on-screen time of every beat (mirrors how the long video was cut)."""
     beats, off = [], 0.0
@@ -228,6 +246,14 @@ async def make(ctx: dict, render_out: dict) -> list[dict]:
                                        ctx["out"].get("research", {}).get("facts", [])) + " "
                               + " ".join(texts))
     meta = await _meta(texts, ch, allowed)
+    from app import guard
+    facts = ctx["out"].get("research", {}).get("facts", [])
+    fails = await guard.claim_fails([m["title"] for m in meta], facts)
+    main_t = (ctx["out"].get("package") or {}).get("title") or scr.get("title", "")
+    for i, m in enumerate(meta, 1):
+        if m["title"] in fails:
+            log.info("short %d title overclaims (%s); using a safe title", i, fails[m["title"]])
+            m["title"] = safe_title(main_t, i)
 
     lang = "ta" if ch.get("language") == "ta" else "en"
     disc = str(scr.get("disclaimer_short") or "Educational content only. Not professional advice.")

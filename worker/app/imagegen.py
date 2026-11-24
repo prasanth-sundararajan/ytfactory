@@ -44,7 +44,8 @@ BRAND = {
         "mood": "cheerful, clear and trustworthy",
         "bans": ("no text, no letters, no numbers, no logos, no watermark, no real people or "
                  "celebrities, no photographic realism, no real banknote designs, no government "
-                 "emblems, seals, stamps or national symbols, nothing that looks like an "
+                 "emblems, seals, stamps or national symbols, no website addresses, nothing that "
+                 "looks like an "
                  "official document or government building sign"),
     },
 }

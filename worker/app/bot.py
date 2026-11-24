@@ -9,6 +9,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
 
 from app import analytics, healer, llm, news, trends, youtube
 from app import schedule as SCH
+from app import guard
 from app.config import CFG
 from app.db import (board, counts, get_video, list_channels, pending_videos,
                     set_published, set_video_status)
@@ -54,6 +55,22 @@ def approval_keyboard(video_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def reject_keyboard(video_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="\u274c Reject", callback_data=f"rj:{video_id}")]])
+
+
+async def _gated(video_id: int, ctx: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Caption + buttons after the final guardrail gate (fails closed)."""
+    problems = await guard.full_gate(ctx["out"])
+    if not problems:
+        return _caption(ctx)[:1024], approval_keyboard(video_id)
+    set_video_status(video_id, "needs_review")
+    warn = "\u26d4 <b>Blocked by guardrails - not approvable</b>\n" + "\n".join(
+        "\u2022 " + p for p in problems[:6]) + "\n\n"
+    return (warn + _caption(ctx))[:1024], reject_keyboard(video_id)
+
+
 def _caption(ctx: dict) -> str:
     scr = ctx["out"].get("script") or {}
     r = ctx["out"].get("render") or {}
@@ -80,10 +97,11 @@ async def deliver(m: Message, video_id: int, ctx: dict) -> None:
         await m.answer("\u26a0\ufe0f No video file to show (render failed).")
         return
     try:
+        cap, kb = await _gated(video_id, ctx)
         await m.answer_video(
             FSInputFile(preview),
-            caption=_caption(ctx)[:1024],
-            reply_markup=approval_keyboard(video_id),
+            caption=cap,
+            reply_markup=kb,
             supports_streaming=True,
         )
         for sh in (r.get("shorts") or []):
@@ -120,8 +138,9 @@ async def deliver_to_owner(b, video_id: int, ctx: dict) -> None:
     if not preview or not os.path.isfile(preview):
         await b.send_message(CFG.owner_id, f"\u26a0\ufe0f Video {video_id}: no preview file.")
         return
-    await b.send_video(CFG.owner_id, FSInputFile(preview), caption=_caption(ctx)[:1024],
-                       reply_markup=approval_keyboard(video_id), supports_streaming=True)
+    cap, kb = await _gated(video_id, ctx)
+    await b.send_video(CFG.owner_id, FSInputFile(preview), caption=cap,
+                       reply_markup=kb, supports_streaming=True)
     for sh in (r.get("shorts") or []):
         if sh.get("error") or not sh.get("preview") or not os.path.isfile(sh["preview"]):
             continue
@@ -298,6 +317,12 @@ def register(dp: Dispatcher) -> None:
             await cb.answer("No such video", show_alert=True)
             return
         data = row["script"] or {}
+        problems = await guard.full_gate(data)
+        if problems:  # an old preview can never bypass the gate
+            await cb.answer("Blocked by guardrails", show_alert=True)
+            await cb.message.answer("\u26d4 Upload blocked:\n" + "\n".join(
+                "\u2022 " + p for p in problems[:8]))
+            return
         scr = data.get("script") or {}
         render = data.get("render") or {}
         master = render.get("master")

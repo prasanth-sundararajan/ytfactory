@@ -189,7 +189,7 @@ async def scout(ctx) -> dict:
         )
     trend_block = trends.scout_block(ch["id"])
     prompt = f"""You are the Scout agent for a YouTube channel.
-NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources by organisation only, e.g. 'according to an RBI press release' or 'the Income Tax Department says'. NO SITE INFO - never say, spell or show a website name, domain or URL (such as incometax.gov.in, rbi.org.in, www or http) in the narration, headings, on-screen text, titles or thumbnails.
 
 Channel: {ch['name']}
 Language: {_lang(ctx)}
@@ -440,7 +440,7 @@ async def brief(ctx) -> dict:
 
     hook_block = trends.brief_block(ch["id"])
     prompt = f"""You are the Brief agent. Turn this topic into a tight 5-minute video brief.
-NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources by organisation only, e.g. 'according to an RBI press release' or 'the Income Tax Department says'. NO SITE INFO - never say, spell or show a website name, domain or URL (such as incometax.gov.in, rbi.org.in, www or http) in the narration, headings, on-screen text, titles or thumbnails.
 
 Channel: {ch['name']}
 Language: {_lang(ctx)}
@@ -569,7 +569,7 @@ Rules:
 - end with a calm call to action, no hype, no promises of returns
 - you do not need to output seconds; they are computed from your word count
 
-NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources by organisation only, e.g. 'according to an RBI press release' or 'the Income Tax Department says'. NO SITE INFO - never say, spell or show a website name, domain or URL (such as incometax.gov.in, rbi.org.in, www or http) in the narration, headings, on-screen text, titles or thumbnails.
 
 DISCLAIMER - mandatory, written in {lang}:
 - "disclaimer" must be exactly this text:
