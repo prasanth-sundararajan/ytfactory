@@ -2,17 +2,128 @@
   "version": 2,
   "pipeline": "ytfactory",
   "agents": [
-    {"id": "scout",    "name": "Scout",         "role": "Trend & topic discovery",        "phase": 1, "depends": []},
-    {"id": "research", "name": "Research",      "role": "Serper web search & fact sheet", "phase": 1, "depends": ["scout"]},
-    {"id": "brief",    "name": "Brief",         "role": "Audience angle & outline",       "phase": 1, "depends": ["research"]},
-    {"id": "script",   "name": "Scriptwriter",  "role": "5-min script + 2 shorts",        "phase": 1, "depends": ["brief"]},
-    {"id": "fact",     "name": "FactCheck",     "role": "Claim & number verification",    "phase": 1, "depends": ["script"]},
-    {"id": "voice",    "name": "Voice",         "role": "TTS narration (en / ta)",        "phase": 2, "depends": ["script"]},
-    {"id": "visual",   "name": "VisualDirector","role": "Shot list & image prompts",      "phase": 2, "depends": ["script"]},
-    {"id": "render",   "name": "Renderer",      "role": "FFmpeg 1080p / 9:16",            "phase": 2, "depends": ["voice", "visual"]},
-    {"id": "qc",       "name": "QC",            "role": "A/V, caption & policy gate",     "phase": 3, "depends": ["render"]},
-    {"id": "publish",  "name": "Publisher",     "role": "YouTube / IG / FB upload",       "phase": 3, "depends": ["qc"]},
-    {"id": "leads",    "name": "Leads",         "role": "Redirect links & attribution",   "phase": 3, "depends": ["publish"]},
-    {"id": "analyst",  "name": "Analyst",       "role": "Performance feedback loop",      "phase": 4, "depends": ["publish"]}
+    {
+      "id": "scout",
+      "name": "Scout",
+      "role": "Trend & topic discovery",
+      "phase": 1,
+      "depends": []
+    },
+    {
+      "id": "research",
+      "name": "Research",
+      "role": "Serper web search & fact sheet",
+      "phase": 1,
+      "depends": [
+        "scout"
+      ]
+    },
+    {
+      "id": "brief",
+      "name": "Brief",
+      "role": "Audience angle & outline",
+      "phase": 1,
+      "depends": [
+        "research"
+      ]
+    },
+    {
+      "id": "script",
+      "name": "Scriptwriter",
+      "role": "5-min script + 2 shorts",
+      "phase": 1,
+      "depends": [
+        "brief"
+      ]
+    },
+    {
+      "id": "fact",
+      "name": "FactCheck",
+      "role": "Claim & number verification",
+      "phase": 1,
+      "depends": [
+        "script"
+      ]
+    },
+    {
+      "id": "package",
+      "name": "Packaging",
+      "phase": 1,
+      "role": "Hook title & thumbnail",
+      "depends": [
+        "fact"
+      ]
+    },
+    {
+      "id": "voice",
+      "name": "Voice",
+      "role": "TTS narration (en / ta)",
+      "phase": 2,
+      "depends": [
+        "script"
+      ]
+    },
+    {
+      "id": "visual",
+      "name": "VisualDirector",
+      "role": "Shot list & image prompts",
+      "phase": 2,
+      "depends": [
+        "script"
+      ]
+    },
+    {
+      "id": "render",
+      "name": "Renderer",
+      "role": "FFmpeg 1080p / 9:16",
+      "phase": 2,
+      "depends": [
+        "voice",
+        "visual"
+      ]
+    },
+    {
+      "id": "qc",
+      "name": "QC",
+      "role": "A/V, caption & policy gate",
+      "phase": 3,
+      "depends": [
+        "render"
+      ]
+    },
+    {
+      "id": "publish",
+      "name": "Publisher",
+      "role": "YouTube / IG / FB upload",
+      "phase": 3,
+      "depends": [
+        "qc"
+      ]
+    },
+    {
+      "id": "leads",
+      "name": "Leads",
+      "role": "Redirect links & attribution",
+      "phase": 3,
+      "depends": [
+        "publish"
+      ]
+    },
+    {
+      "id": "analyst",
+      "name": "Analyst",
+      "role": "Performance feedback loop",
+      "phase": 4,
+      "depends": [
+        "publish"
+      ]
+    },
+    {
+      "id": "doctor",
+      "name": "Doctor",
+      "phase": 4,
+      "role": "Diagnose & auto-fix failures",
+      "depends": []
+    }
   ]
 }

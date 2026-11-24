@@ -136,6 +136,14 @@ def set_video_status(video_id: int, status: str) -> None:
         )
 
 
+def set_published(video_id: int, yt_video_id: str) -> None:
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """update videos set status='published', yt_video_id=%s,
+                                 published_at=now(), updated_at=now()
+               where id=%s""", (yt_video_id, video_id))
+
+
 def recent_topics(channel_id: int, limit: int = 8) -> list[str]:
     with conn() as c, c.cursor() as cur:
         cur.execute(

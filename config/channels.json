@@ -6,11 +6,21 @@
       "language": "en",
       "niche": "personal finance for Indian working professionals - tax, mutual funds, insurance, salary, debt, credit",
       "official_sources": [
-        "incometax.gov.in", "rbi.org.in", "sebi.gov.in", "amfiindia.com",
-        "nseindia.com", "bseindia.com", "irdai.gov.in", "epfindia.gov.in",
-        "npci.org.in", "gst.gov.in", "pfrda.org.in", "gov.in", "nic.in"
+        "incometax.gov.in",
+        "rbi.org.in",
+        "sebi.gov.in",
+        "amfiindia.com",
+        "nseindia.com",
+        "bseindia.com",
+        "irdai.gov.in",
+        "epfindia.gov.in",
+        "npci.org.in",
+        "gst.gov.in",
+        "pfrda.org.in",
+        "gov.in",
+        "nic.in"
       ],
-      "disclaimer": "This video is educational only and is not financial, tax or investment advice. Rules and rates change - verify everything on the official government or AMFI portal before acting. We are not SEBI-registered advisors."
+      "disclaimer": "This content is shared for educational and informational purposes only and should not be considered financial or investment advice. Please do your own research before investing or trading, as all market-related profits and losses are solely your responsibility."
     },
     {
       "slug": "ai-brief",
@@ -18,8 +28,13 @@
       "language": "en",
       "niche": "practical AI tools and workflows for freelancers and small businesses",
       "official_sources": [
-        "openai.com", "anthropic.com", "ai.google.dev", "support.google.com",
-        "learn.microsoft.com", "meta.com", "huggingface.co"
+        "openai.com",
+        "anthropic.com",
+        "ai.google.dev",
+        "support.google.com",
+        "learn.microsoft.com",
+        "meta.com",
+        "huggingface.co"
       ],
       "disclaimer": "This video is educational only. AI tools, prices and terms change frequently - confirm current details on the official product site before you rely on them."
     },
@@ -29,9 +44,19 @@
       "language": "ta",
       "niche": "Tamil personal finance - savings, investment basics, money mistakes, family budgeting",
       "official_sources": [
-        "incometax.gov.in", "rbi.org.in", "sebi.gov.in", "amfiindia.com",
-        "nseindia.com", "bseindia.com", "irdai.gov.in", "epfindia.gov.in",
-        "npci.org.in", "gst.gov.in", "pfrda.org.in", "gov.in", "nic.in"
+        "incometax.gov.in",
+        "rbi.org.in",
+        "sebi.gov.in",
+        "amfiindia.com",
+        "nseindia.com",
+        "bseindia.com",
+        "irdai.gov.in",
+        "epfindia.gov.in",
+        "npci.org.in",
+        "gst.gov.in",
+        "pfrda.org.in",
+        "gov.in",
+        "nic.in"
       ],
       "disclaimer": "இந்த வீடியோ கல்வி நோக்கத்திற்காக மட்டுமே; இது நிதி, வரி அல்லது முதலீட்டு ஆலோசனை அல்ல. விதிமுறைகள் மாறக்கூடியவை - எந்த முடிவும் எடுக்கும் முன் அதிகாரப்பூர்வ அரசு இணையதளத்தில் சரிபார்க்கவும். நாங்கள் SEBI பதிவு பெற்ற ஆலோசகர்கள் அல்ல."
     },
@@ -41,8 +66,12 @@
       "language": "ta",
       "niche": "Tamil technology and AI - useful tools, apps, and how-to explainers",
       "official_sources": [
-        "support.google.com", "ai.google.dev", "openai.com", "anthropic.com",
-        "learn.microsoft.com", "meta.com"
+        "support.google.com",
+        "ai.google.dev",
+        "openai.com",
+        "anthropic.com",
+        "learn.microsoft.com",
+        "meta.com"
       ],
       "disclaimer": "இந்த வீடியோ கல்வி நோக்கத்திற்காக மட்டுமே. தொழில்நுட்பம், விலை மற்றும் விதிமுறைகள் அடிக்கடி மாறும் - பயன்படுத்தும் முன் அதிகாரப்பூர்வ இணையதளத்தில் உறுதிப்படுத்தவும்."
     }

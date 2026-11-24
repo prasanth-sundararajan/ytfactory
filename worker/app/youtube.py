@@ -17,15 +17,25 @@ class YouTubeError(RuntimeError):
     pass
 
 
-def access_token() -> str:
-    if not CFG.yt_refresh_token:
+def _token_for(slug):
+    """YT_REFRESH_TOKEN_<SLUG> if set, else the shared YT_REFRESH_TOKEN."""
+    if slug:
+        t = os.environ.get("YT_REFRESH_TOKEN_" + slug.upper().replace("-", "_"), "")
+        if t:
+            return t
+    return CFG.yt_refresh_token
+
+
+def access_token(slug: str | None = None) -> str:
+    refresh = _token_for(slug)
+    if not refresh:
         raise YouTubeError("YT_REFRESH_TOKEN missing - run oauth-finish first")
     r = httpx.post(
         TOKEN_URL,
         data={
             "client_id": CFG.yt_client_id,
             "client_secret": CFG.yt_client_secret,
-            "refresh_token": CFG.yt_refresh_token,
+            "refresh_token": refresh,
             "grant_type": "refresh_token",
         },
         timeout=30,
@@ -55,12 +65,13 @@ def channel(token: str | None = None) -> dict:
 
 
 def upload(path: str, title: str, description: str = "", privacy: str = "private",
-           tags: list[str] | None = None, category_id: str = "27") -> dict:
+           tags: list[str] | None = None, category_id: str = "27",
+           slug: str | None = None) -> dict:
     """Resumable upload. Returns the API response (contains the video id)."""
     if not os.path.isfile(path):
         raise YouTubeError("file not found: " + path)
 
-    token = access_token()
+    token = access_token(slug)
     size = os.path.getsize(path)
 
     init = httpx.post(
@@ -104,3 +115,17 @@ def upload(path: str, title: str, description: str = "", privacy: str = "private
     if put.status_code >= 300:
         raise YouTubeError("upload failed %s: %s" % (put.status_code, put.text[:300]))
     return put.json()
+
+
+def set_thumbnail(video_id: str, path: str, slug: str | None = None) -> None:
+    """Needs a phone-verified channel; raises YouTubeError otherwise."""
+    if not os.path.isfile(path):
+        raise YouTubeError("thumbnail file not found")
+    r = httpx.post(
+        "https://www.googleapis.com/upload/youtube/v3/thumbnails/set",
+        params={"videoId": video_id, "uploadType": "media"},
+        headers={"Authorization": "Bearer " + access_token(slug),
+                 "Content-Type": "image/jpeg"},
+        content=open(path, "rb").read(), timeout=60)
+    if r.status_code >= 300:
+        raise YouTubeError("thumbnail %s: %s" % (r.status_code, r.text[:160]))

@@ -7,10 +7,10 @@ from aiogram.filters import Command
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from app import llm, youtube
+from app import analytics, healer, llm, news, trends, youtube
 from app.config import CFG
 from app.db import (board, counts, get_video, list_channels, pending_videos,
-                    set_video_status)
+                    set_published, set_video_status)
 from app.pipeline import run_pipeline, summary_text
 
 log = logging.getLogger("bot")
@@ -85,6 +85,15 @@ async def deliver(m: Message, video_id: int, ctx: dict) -> None:
             reply_markup=approval_keyboard(video_id),
             supports_streaming=True,
         )
+        for sh in (r.get("shorts") or []):
+            if sh.get("error") or not sh.get("preview") or not os.path.isfile(sh["preview"]):
+                continue
+            await m.answer_video(
+                FSInputFile(sh["preview"]),
+                caption=f"Short {sh.get('index')}: {sh.get('title', '')} "
+                        f"({sh.get('duration', 0):.0f}s, {sh.get('start', 0):.0f}s-"
+                        f"{sh.get('end', 0):.0f}s of the full video)"[:1024],
+                supports_streaming=True)
     except Exception as e:
         log.exception("could not send preview")
         await m.answer(
@@ -194,6 +203,51 @@ def register(dp: Dispatcher) -> None:
         ctx = row["script"] or {}
         await deliver(m, vid, ctx)
 
+    @dp.message(Command("doctor"))
+    async def _doctor(m: Message):
+        await m.answer(healer.recent())
+
+    @dp.message(Command("news"))
+    async def _news(m: Message):
+        note = await m.answer("Reading RBI / PIB announcements\u2026")
+        try:
+            r = await news.run("money-clear", force=True)
+            cands = r.get("candidates") or []
+            if not cands:
+                await note.edit_text("No suitable official announcement today. "
+                                     "Scout will use an evergreen topic.")
+            else:
+                await note.edit_text("<b>Official news candidates (tried in order)</b>\n"
+                                     + "\n".join(f"{i}. {c['topic']}"
+                                                 for i, c in enumerate(cands, 1)))
+        except Exception as e:
+            await note.edit_text("News pick failed: " + str(e)[:300])
+
+    @dp.message(Command("trends"))
+    async def _trends(m: Message):
+        parts = (m.text or "").split()
+        slug = parts[1] if len(parts) > 1 else "money-clear"
+        note = await m.answer("Scanning YouTube trends\u2026 (about a minute)")
+        try:
+            rep = await trends.run(slug)
+            await note.edit_text(trends.report_text(slug, rep, len(rep.get("top_videos", []))))
+        except Exception as e:
+            await note.edit_text("Trend scan failed: " + str(e)[:300])
+
+    @dp.message(Command("stats"))
+    async def _stats(m: Message):
+        parts = (m.text or "").split()
+        slugs = parts[1:] or [c["slug"] for c in list_channels()]
+        note = await m.answer("Collecting analytics\u2026")
+        out = []
+        for s in slugs:
+            try:
+                await asyncio.to_thread(analytics.collect, s)
+                out.append(analytics.stats_text(s))
+            except Exception as e:
+                out.append(f"<b>{s}</b>: {str(e)[:160]}")
+        await note.edit_text("\n\n".join(out))
+
     @dp.message(Command("ping"))
     async def _ping(m: Message):
         note = await m.answer("Testing providers\u2026")
@@ -227,23 +281,48 @@ def register(dp: Dispatcher) -> None:
         except Exception:
             pass
         try:
+            pkg = data.get("package") or {}
             credits = [c for c in (render.get("credits") or []) if c]
             desc = scr.get("description") or ""
             if credits:
                 desc += "\n\nImages:\n" + "\n".join("- " + c for c in credits[:12])
             res = youtube.upload(
                 master,
-                title=scr.get("title") or "Untitled",
+                title=pkg.get("title") or scr.get("title") or "Untitled",
                 description=desc,
                 privacy=PRIVACY,
                 tags=scr.get("tags") or [],
                 category_id=str(scr.get("category_id") or 27),
+                slug=row.get("slug"),
             )
-            set_video_status(vid, "published")
+            set_published(vid, str(res.get("id")))
+            thumb_note = ""
+            if pkg.get("thumbnail") and os.path.isfile(pkg["thumbnail"]):
+                try:
+                    await asyncio.to_thread(youtube.set_thumbnail, str(res.get("id")),
+                                            pkg["thumbnail"], row.get("slug"))
+                except Exception as te:
+                    thumb_note = "\nThumbnail not set: " + str(te)[:120]
+            shorts_note = ""
+            for sh in (render.get("shorts") or []):
+                if sh.get("error") or not sh.get("master") or not os.path.isfile(sh["master"]):
+                    continue
+                try:
+                    link_desc = (str(sh.get("description") or "")
+                                 .replace("#Shorts", "Full video: https://youtu.be/"
+                                          + str(res.get("id")) + "\n\n#Shorts", 1))
+                    r2 = await asyncio.to_thread(
+                        youtube.upload, sh["master"], title=str(sh.get("title"))[:95],
+                        description=link_desc, privacy=PRIVACY,
+                        tags=sh.get("tags") or ["shorts"], category_id="27",
+                        slug=row.get("slug"))
+                    shorts_note += f"\nShort {sh.get('index')}: https://youtu.be/{r2.get('id')}"
+                except Exception as se:
+                    shorts_note += f"\nShort {sh.get('index')} failed: " + str(se)[:100]
             link = "https://youtu.be/" + str(res.get("id"))
             await cb.message.edit_caption(
                 caption=f"\u2705 Uploaded ({PRIVACY})\n{link}\n\n"
-                        f"<b>{scr.get('title', '')}</b>"
+                        f"<b>{pkg.get('title') or scr.get('title', '')}</b>" + thumb_note + shorts_note
             )
         except Exception as e:
             log.exception("upload failed")
@@ -265,4 +344,4 @@ def register(dp: Dispatcher) -> None:
 
     @dp.message(F.text & ~F.text.startswith("/"))
     async def _chat(m: Message):
-        await m.answer("Commands: /status  /channels  /new  /pending  /show  /ping")
+        await m.answer("Commands: /status  /channels  /new  /pending  /show  /stats  /trends  /news  /doctor  /ping")

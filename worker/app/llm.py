@@ -86,6 +86,28 @@ async def _groq(client, model, prompt, system=None, json_mode=False, temperature
     return d["choices"][0]["message"]["content"]
 
 
+async def _deepseek(client, prompt, system=None, json_mode=False, temperature=0.7):
+    """DeepSeek uses the OpenAI chat format. Last-resort fallback."""
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    payload = {"model": CFG.deepseek_model, "messages": msgs,
+               "temperature": temperature}
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    r = await client.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={"Authorization": "Bearer " + CFG.deepseek_key},
+        json=payload,
+        timeout=180,
+    )
+    d = r.json()
+    if "error" in d:
+        raise LLMError(str(d["error"])[:160])
+    return d["choices"][0]["message"]["content"]
+
+
 async def _groq_chain(client):
     try:
         r = await client.get(
@@ -134,6 +156,20 @@ async def generate(prompt: str, system: str | None = None, json_mode: bool = Fal
                 errors.append(f"{key}: {str(e)[:120]}")
                 if _is_quota(str(e)):
                     _cool(key)
+        if CFG.deepseek_key:
+            key = "deepseek/" + CFG.deepseek_model
+            if _cooling(key):
+                errors.append(f"{key}: cooling down")
+            else:
+                try:
+                    text = await _deepseek(client, prompt, system, json_mode, temperature)
+                    return {"text": text, "provider": "deepseek",
+                            "model": CFG.deepseek_model}
+                except Exception as e:
+                    log.warning("%s failed: %s", key, str(e)[:160])
+                    errors.append(f"{key}: {str(e)[:120]}")
+                    if _is_quota(str(e)):
+                        _cool(key)
     raise LLMError("all providers failed | " + " | ".join(errors[:6]))
 
 
@@ -192,4 +228,13 @@ async def health() -> list[dict]:
                 out.append(
                     {"provider": "groq", "model": model, "ok": False, "detail": str(e)[:60]}
                 )
+    if CFG.deepseek_key:
+        async with httpx.AsyncClient() as client:
+            try:
+                await _deepseek(client, "Reply with exactly: OK")
+                out.append({"provider": "deepseek", "model": CFG.deepseek_model,
+                            "ok": True, "detail": ""})
+            except Exception as e:
+                out.append({"provider": "deepseek", "model": CFG.deepseek_model,
+                            "ok": False, "detail": str(e)[:60]})
     return out

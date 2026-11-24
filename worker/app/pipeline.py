@@ -1,6 +1,8 @@
+import asyncio
 import logging
 
-from app import db
+from app import db, healer
+from app import packaging  # noqa: F401  (registers the agent)
 from app.agents import AGENTS, Blocked
 
 log = logging.getLogger("pipeline")
@@ -10,16 +12,26 @@ MAX_REVISIONS = 1
 
 async def _run_agent(agent_id: str, video_id: int, ctx: dict) -> dict:
     run_id = db.record_start(agent_id, video_id)
-    try:
-        out = await AGENTS[agent_id](ctx)
-        ctx["out"][agent_id] = out
-        db.record_finish(run_id, "done", payload=out)
-        log.info("agent %s done", agent_id)
-        return out
-    except Exception as e:
-        db.record_finish(run_id, "failed", note=str(e))
-        log.exception("agent %s failed", agent_id)
-        raise
+    attempt = 0
+    while True:
+        try:
+            out = await AGENTS[agent_id](ctx)
+            ctx["out"][agent_id] = out
+            db.record_finish(run_id, "done", payload=out)
+            log.info("agent %s done", agent_id)
+            return out
+        except Blocked as e:  # a deliberate safety stop - never retried
+            db.record_finish(run_id, "failed", note=str(e))
+            raise
+        except Exception as e:
+            delay = healer.handle(agent_id, e, attempt)
+            if delay is None:
+                db.record_finish(run_id, "failed", note=str(e))
+                log.exception("agent %s failed", agent_id)
+                await healer.report(agent_id, e, video_id)
+                raise
+            attempt += 1
+            await asyncio.sleep(delay)
 
 
 async def run_pipeline(slug: str, kind: str = "long",
@@ -33,17 +45,17 @@ async def run_pipeline(slug: str, kind: str = "long",
 
     # Scout + Research, retried with a different topic if the topic cannot be
     # grounded in official sources. Better to pick again than to publish a guess.
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             await _run_agent("scout", video_id, ctx)
             await _run_agent("research", video_id, ctx)
             break
         except Blocked as e:
-            log.warning("research blocked (attempt %d/3): %s", attempt + 1, e)
+            log.warning("research blocked (attempt %d/5): %s", attempt + 1, e)
             ctx.setdefault("avoid", []).append(
                 str(ctx["out"].get("scout", {}).get("topic", ""))
             )
-            if attempt == 2:
+            if attempt == 4:
                 db.set_video_status(video_id, "blocked")
                 ctx["blocked"] = str(e)
                 return video_id, ctx
@@ -83,6 +95,11 @@ async def run_pipeline(slug: str, kind: str = "long",
         log.info("trim pass (was %ss)", scr.get("total_seconds"))
         await _run_agent("script", video_id, ctx)
         await _run_agent("fact", video_id, ctx)
+
+    try:
+        await _run_agent("package", video_id, ctx)
+    except Exception as e:  # packaging is optional; the video still ships
+        log.warning("packaging skipped: %s", e)
 
     db.save_script(video_id, ctx["out"])
     final = ctx["out"].get("fact", {})

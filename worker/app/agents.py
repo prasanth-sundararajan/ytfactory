@@ -13,7 +13,7 @@ import os
 import re
 from urllib.parse import urlparse
 
-from app import llm, search
+from app import llm, news, search, trends
 from app.db import recent_topics
 
 LANG = {"en": "English", "ta": "Tamil"}
@@ -112,6 +112,9 @@ def _is_guidance(url: str, title: str) -> bool:
 def _search_query(sc: dict) -> str:
     """Short Google-shaped query built from the scout's keywords."""
     kws = [str(k).strip() for k in (sc.get("keywords") or []) if str(k).strip()]
+    if sc.get("from_news") and sc.get("search_query"):
+        raw = str(sc["search_query"])
+        return " ".join(re.findall(r"[A-Za-z0-9]+", raw)[:7])
     raw = " ".join(kws[:4]) if len(kws) >= 2 else str(
         sc.get("search_query") or sc.get("topic") or ""
     )
@@ -170,6 +173,10 @@ Never present a tax slab, rate, limit or rule from an earlier year as if it is c
 @agent("scout")
 async def scout(ctx) -> dict:
     ch = ctx["channel"]
+    if ch["slug"] == "money-clear":
+        pk = news.todays_pick(ch["id"], ctx.get("avoid") or [])
+        if pk:
+            return pk
     recent = recent_topics(ch["id"]) or ["(none yet - this is the first video)"]
     avoid = ctx.get("avoid") or []
     avoid_block = ""
@@ -180,7 +187,9 @@ async def scout(ctx) -> dict:
             + chr(10).join("- " + t for t in avoid)
             + "\n"
         )
+    trend_block = trends.scout_block(ch["id"])
     prompt = f"""You are the Scout agent for a YouTube channel.
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
 
 Channel: {ch['name']}
 Language: {_lang(ctx)}
@@ -189,11 +198,15 @@ Format: a 5-minute explainer video, plus two 60-second shorts cut from it.
 
 Already covered (do not repeat):
 {chr(10).join('- ' + t for t in recent)}
-{avoid_block}
+{avoid_block}{trend_block}
 Pick ONE topic for today.
 
 Rules:
 - high search intent, evergreen or genuinely timely
+- no fresh official news is available, so choose a real money situation of ONE kind
+  of person: a first-job salaried employee, a freelancer, a parent, a couple,
+  a new investor, a senior citizen, a borrower or a credit-card holder; state who
+  it is for in the angle
 - specific, not vague. Good: "Why your first year of SIP returns is misleading".
   Bad: "Mutual funds explained".
 - explainable honestly in 5 minutes
@@ -270,6 +283,11 @@ async def research(ctx) -> dict:
     if strict:
         evidence = [e for e in evidence if _allowed(e["url"], official)]
     evidence = evidence[:16]
+    src = sc.get("source_url")
+    if src and (not strict or _allowed(src, official)) \
+            and src not in {e["url"] for e in evidence}:
+        evidence.insert(0, {"title": sc["topic"], "url": src,
+                            "snippet": sc.get("why_now", "")})
 
     if not evidence:
         detail = "; ".join(errors)[:200] or "no usable results"
@@ -420,14 +438,16 @@ async def brief(ctx) -> dict:
             "- " + f.get("fact", "") for f in res.get("facts", [])
         )
 
+    hook_block = trends.brief_block(ch["id"])
     prompt = f"""You are the Brief agent. Turn this topic into a tight 5-minute video brief.
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
 
 Channel: {ch['name']}
 Language: {_lang(ctx)}
 Topic: {sc['topic']}
 Angle: {sc['angle']}
 {facts}
-
+{hook_block}
 Build a brief for a 300-second video:
 - one promise the viewer gets in the first 20 seconds
 - five beats that each take about 50 seconds
@@ -548,6 +568,8 @@ Rules:
 - no emojis, no stage directions inside the narration, no markdown
 - end with a calm call to action, no hype, no promises of returns
 - you do not need to output seconds; they are computed from your word count
+
+NO ENDORSEMENT - never say or imply that this video, channel or creator is official, government-run, or approved, endorsed or sponsored by the government, RBI, SEBI, the Income Tax Department or any regulator. Do not use the word 'official' to describe this video or channel. Cite sources plainly, e.g. 'according to an RBI press release' or 'the Income Tax Department's website says'.
 
 DISCLAIMER - mandatory, written in {lang}:
 - "disclaimer" must be exactly this text:
@@ -836,16 +858,23 @@ async def render_agent(ctx) -> dict:
     )
 
     shorts = []
-    for i, sh in enumerate(scr.get("shorts") or [], 1):
-        if not str(sh.get("narration", "")).strip():
-            continue
-        try:
-            shorts.append(
-                await R.render_short(sh, scr, ch, ctx["video_id"], i, MEDIA_DIR)
-            )
-        except Exception as e:  # a broken short must not lose the long video
-            shorts.append({"index": i, "title": sh.get("title", ""),
-                           "error": str(e)[:300]})
+    try:
+        from app import cutshorts
+        shorts = await cutshorts.make(ctx, out)
+    except Exception as e:
+        __import__("logging").getLogger("agents").warning(
+            "short cutter failed, falling back to written shorts: %s", e)
+    if not shorts:
+        for i, sh in enumerate(scr.get("shorts") or [], 1):
+            if not str(sh.get("narration", "")).strip():
+                continue
+            try:
+                shorts.append(
+                    await R.render_short(sh, scr, ch, ctx["video_id"], i, MEDIA_DIR)
+                )
+            except Exception as e:  # a broken short must not lose the long video
+                shorts.append({"index": i, "title": sh.get("title", ""),
+                               "error": str(e)[:300]})
     out["shorts"] = shorts
     out["credits"] = (im.get("credits") or [])
     try:
