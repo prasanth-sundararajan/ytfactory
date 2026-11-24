@@ -95,12 +95,22 @@ async def deliver(m: Message, video_id: int, ctx: dict) -> None:
                         f"({sh.get('duration', 0):.0f}s, {sh.get('start', 0):.0f}s-"
                         f"{sh.get('end', 0):.0f}s of the full video)"[:1024],
                 supports_streaming=True)
+        await _send_thumbs(lambda f, caption: m.answer_photo(f, caption=caption), ctx)
     except Exception as e:
         log.exception("could not send preview")
         await m.answer(
             "\u26a0\ufe0f Preview too large for Telegram (%s). "
             "The file is on the server; use /pending to retry." % str(e)[:150]
         )
+
+
+async def _send_thumbs(send_photo, ctx: dict) -> None:
+    t = ctx["out"].get("thumbnail") or {}
+    for i, v in enumerate(t.get("variants") or [], 1):
+        if os.path.isfile(v.get("path", "")):
+            tag = "uploads with the video" if i == 1 else "alternative for an A/B test"
+            await send_photo(FSInputFile(v["path"]),
+                             caption=f"Thumbnail {i}: {v.get('text', '')} ({tag})"[:1024])
 
 
 async def deliver_to_owner(b, video_id: int, ctx: dict) -> None:
@@ -118,6 +128,7 @@ async def deliver_to_owner(b, video_id: int, ctx: dict) -> None:
         await b.send_video(CFG.owner_id, FSInputFile(sh["preview"]),
                            caption=f"Short {sh.get('index')}: {sh.get('title', '')}"[:1024],
                            supports_streaming=True)
+    await _send_thumbs(lambda f, caption: b.send_photo(CFG.owner_id, f, caption=caption), ctx)
 
 
 async def _produce(m: Message, note: Message, slug: str) -> None:
@@ -319,10 +330,11 @@ def register(dp: Dispatcher) -> None:
             )
             set_published(vid, str(res.get("id")))
             thumb_note = ("\nGoes public: " + SCH.fmt(main_at)) if main_at else ""
-            if pkg.get("thumbnail") and os.path.isfile(pkg["thumbnail"]):
+            thumb = (data.get("thumbnail") or {}).get("path") or pkg.get("thumbnail")
+            if thumb and os.path.isfile(thumb):
                 try:
                     await asyncio.to_thread(youtube.set_thumbnail, str(res.get("id")),
-                                            pkg["thumbnail"], row.get("slug"))
+                                            thumb, row.get("slug"))
                 except Exception as te:
                     thumb_note = "\nThumbnail not set: " + str(te)[:120]
             shorts_note = ""

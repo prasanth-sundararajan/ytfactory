@@ -3,6 +3,7 @@ import logging
 
 from app import db, healer
 from app import packaging  # noqa: F401  (registers the agent)
+from app import thumbnail  # noqa: F401  (registers the agent)
 from app.agents import AGENTS, Blocked
 
 log = logging.getLogger("pipeline")
@@ -100,6 +101,10 @@ async def run_pipeline(slug: str, kind: str = "long",
         await _run_agent("package", video_id, ctx)
     except Exception as e:  # packaging is optional; the video still ships
         log.warning("packaging skipped: %s", e)
+    try:
+        await _run_agent("thumbnail", video_id, ctx)
+    except Exception as e:  # thumbnail art is optional; Packaging's plain one remains
+        log.warning("thumbnail agent skipped: %s", e)
 
     db.save_script(video_id, ctx["out"])
     final = ctx["out"].get("fact", {})

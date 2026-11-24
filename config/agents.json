@@ -55,6 +55,15 @@
       ]
     },
     {
+      "id": "thumbnail",
+      "name": "Thumbnail",
+      "phase": 1,
+      "role": "Thumbnail ideas & design",
+      "depends": [
+        "package"
+      ]
+    },
+    {
       "id": "voice",
       "name": "Voice",
       "role": "TTS narration (en / ta)",

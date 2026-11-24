@@ -181,8 +181,12 @@ _CALL = {"gemini": _gemini, "openai": _openai, "cloudflare": _cloudflare,
          "together": _together, "stub": _stub}
 
 
-async def _generate(client, prompt: str, seed: int) -> bytes | None:
-    for name in providers():
+async def _generate(client, prompt: str, seed: int,
+                    order: list[str] | None = None) -> bytes | None:
+    active = providers()
+    names = [n for n in (order or []) if n in active] + [n for n in active
+                                                          if n not in (order or [])]
+    for name in names:
         if _cooldown.get(name, 0) > time.time():
             continue
         for attempt in range(4):

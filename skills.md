@@ -124,6 +124,19 @@ Declared but not built: Leads (redirect links and attribution).
 Fallback cards use an animated aurora gradient (FFmpeg `gradients` + drifting orbs) with
 a glass panel that fades and slides in.
 
+## 5b. Thumbnail agent (`thumbnail.py`)
+
+- Runs after Packaging. A Thumbnail Director proposes **3 concepts** (2-4 word hook text,
+  one gold accent word, a cartoon scene, why it earns a click honestly).
+- Text is checked in code: 1-4 words, no endorsement words ("official", "RBI-approved"...),
+  no hype, numbers only from verified facts.
+- Layout: text panel on the left, cartoon art on the right (never overlapping a face),
+  `Source: <domain>` badge, channel name. Lines are balanced ("CHECK / FORM 16").
+- Art uses **OpenAI first, Cloudflare backup** (`THUMB_PROVIDERS`): Cloudflare kept drawing
+  Apple logos, play buttons and $ figures. About 3 images, roughly $0.13 per video (estimate).
+- Concept 1 uploads with the video; 2 and 3 are sent to Telegram for manual A/B tests in
+  YouTube Studio. If no art can be made, Packaging's plain thumbnail is used.
+
 ## 6. Shorts Editor (`cutshorts.py`)
 
 - Cuts two Shorts of **15-20 s** from the finished video; no new image or voice cost.
