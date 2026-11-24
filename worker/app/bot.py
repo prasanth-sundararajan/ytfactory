@@ -218,7 +218,8 @@ def register(dp: Dispatcher) -> None:
         if not row:
             await m.answer("No such video.")
             return
-        ctx = row["script"] or {}
+        # videos store the agents output dict; deliver() expects it under "out"
+        ctx = {"out": row["script"] or {}}
         await deliver(m, vid, ctx)
 
     @dp.message(Command("doctor"))
