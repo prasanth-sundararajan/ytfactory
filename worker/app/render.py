@@ -18,6 +18,293 @@ FPS = 25
 CRF_MASTER = 20
 LOUDNESS = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
+VSTOP = set("""
+the a an and or but if then than that this these those is are was were be been
+being of to in on for with from by as at into over under about after before
+between during without you your we our they their it its he she his her i me my
+us them what which who whom how why when where can could should would will
+shall may might must do does did done have has had not no nor so very too also
+just only more most much many some any all each every both few other such own
+same out up down off again further once here there according per cent
+""".split())
+
+# Words that are technically content but make weak card headlines.
+_WEAK = set("""
+understanding specific certain various several important essential really
+actually simply exactly properly correctly smoothly significantly
+straightforward additional alternative general overall entire whole
+distinguish summarize summarise exhausting disciplined verify examine ensure
+check review understand section
+""".split())
+
+NUM_ANY = re.compile(r"(?<![A-Za-z0-9])\d[\d,]*(?:\.\d+)?(?![A-Za-z0-9])")
+UNIT_AFTER = re.compile(
+    r"\s*(%|per\s+cent|lakhs?|crores?|rupees?|months?|years?|days?|weeks?|"
+    r"hours?|minutes?)\b", re.I)
+CUR_BEFORE = re.compile(r"(?:\u20b9|rs\.?)\s*$", re.I)
+BIG_UNIT = ("%", "per cent", "lakh", "lakhs", "crore", "crores")
+
+
+def _indian_group(digits: str) -> str:
+    """50000 -> 50,000; 1500000 -> 15,00,000."""
+    if len(digits) <= 3:
+        return digits
+    head, tail = digits[:-3], digits[-3:]
+    parts = []
+    while len(head) > 2:
+        parts.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        parts.insert(0, head)
+    return ",".join(parts) + "," + tail
+
+
+_UNITS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_SCALES = {"hundred": 100, "thousand": 1000, "lakh": 100000,
+           "lakhs": 100000, "crore": 10000000, "crores": 10000000}
+_WORD_NUM = re.compile(
+    r"\b((?:(?:%s)[\s-]+)+(?:hundred|thousand|lakhs?|crores?))\b"
+    % "|".join(_UNITS), re.I)
+
+
+def _parse_word_number(phrase: str) -> int:
+    total, current = 0, 0
+    for word in re.split(r"[\s-]+", phrase.lower()):
+        if word in _UNITS:
+            current += _UNITS[word]
+        elif word in _SCALES:
+            scale = _SCALES[word]
+            if scale == 100:
+                current = (current or 1) * 100
+            else:
+                total += (current or 1) * scale
+                current = 0
+    return total + current
+
+
+def _word_numbers(text: str) -> str:
+    """'fifty thousand rupees' -> '50000 rupees', so the slide can show it."""
+    return _WORD_NUM.sub(lambda m: str(_parse_word_number(m.group(1))),
+                         text or "")
+
+
+def _highlight(text: str) -> str:
+    """Pick the number a viewer should read off the screen, with its unit.
+
+    Identifiers such as 80CCD or ITR-2 are ignored, and a number carrying a
+    currency mark or a unit (%, lakh, months) beats a bare one.
+    """
+    t = _word_numbers(text or "")
+    best: tuple[int, str, str, bool] | None = None
+    for m in NUM_ANY.finditer(t):
+        unit = ""
+        score = 0
+        cur = bool(CUR_BEFORE.search(t[:m.start()]))
+        if cur:
+            score += 2
+        u = UNIT_AFTER.match(t[m.end():])
+        if u:
+            unit = re.sub(r"\s+", " ", u.group(1).lower())
+            score += 2
+            if unit in BIG_UNIT:
+                score += 2
+        digits = m.group(0).replace(",", "").strip()
+        # A year ("Income Tax Act, 1961") is not a figure to put on a slide,
+        # and a bare one- or two-digit number is usually a list marker.
+        if len(digits) == 4 and digits.isdigit() and 1900 <= int(digits) <= 2099:
+            continue
+        if score == 0 and not (digits.isdigit() and len(digits) >= 4):
+            continue
+        if best is None or score > best[0]:
+            best = (score, m.group(0).strip(), unit, cur)
+    if not best:
+        return ""
+    _, val, unit, cur = best
+    digits = val.replace(",", "")
+    if digits.isdigit() and len(digits) >= 4:
+        val = _indian_group(digits)
+    if cur or unit in ("rupee", "rupees"):
+        return "\u20b9" + val
+    if unit == "%":
+        return val + "%"
+    return (val + " " + unit).strip()
+
+
+def _visual_query(text: str) -> str:
+    words = [w for w in re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+             if w not in VSTOP]
+    return " ".join(words[:6])
+
+
+def _keyword(text: str, heading: str = "") -> str:
+    """The one word a viewer should take from this beat.
+
+    Captions carry the full sentence, so the card shows a single strong term
+    ("deductions", "NPS", "exemptions") rather than a fragment of the line.
+    Terms that also appear in the section heading, identifiers and numbers are
+    preferred; adverbs and filler words are skipped.
+    """
+    head = set(re.findall(r"[a-z0-9()]{4,}", (heading or "").lower()))
+    best: tuple[int, str] | None = None
+    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9()]{2,}", text or ""):
+        raw = m.group(0)
+        low = re.sub(r"[^a-z0-9]", "", raw.lower())
+        if not low or low in VSTOP or low in _WEAK:
+            continue
+        if len(low) < 4 and not (raw.isupper() or any(c.isdigit() for c in raw)):
+            continue
+        if low.endswith("ly") and len(low) > 5:
+            continue
+        score = len(low)
+        if low in head:
+            score += 4
+        if any(c.isdigit() for c in low):
+            score += 4
+        if raw.isupper() and len(raw) >= 3:
+            score += 3
+        if raw[0].isupper() and m.start() > 0:
+            score += 1
+        if best is None or score > best[0]:
+            best = (score, raw)
+    return best[1] if best else ""
+
+
+def split_segments(text: str, total_dur: float, max_words: int = 42) -> list[dict]:
+    """Split narration into sentence beats with approximate times.
+
+    Times are proportional to word count and always sum to total_dur, so the
+    beat visuals line up with the section audio.
+    """
+    raw = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text or "") if p.strip()]
+    if not raw:
+        raw = [str(text or "").strip()]
+    beats: list[str] = []
+    for p in raw:
+        words = p.split()
+        if len(words) > max_words:
+            for k in range(0, len(words), max_words):
+                beats.append(" ".join(words[k:k + max_words]))
+        else:
+            beats.append(p)
+    total_words = sum(len(b.split()) for b in beats) or 1
+    out, t = [], 0.0
+    for b in beats:
+        d = total_dur * len(b.split()) / total_words
+        out.append({"text": b, "start": t, "dur": d})
+        t += d
+    return out
+
+
+def plan_segment_visual(seg: dict, section: dict, niche: str, lang: str,
+                        index: int) -> dict:
+    """Choose a data slide or an image for one narration beat."""
+    text = str(seg.get("text") or "").strip()
+    heading = str(section.get("heading") or "").strip()
+    highlight = _highlight(text)
+    seed = 1000 + index * 137
+    if highlight and len(text.split()) >= 5:
+        # The captions already carry the sentence, so a data slide stays clean:
+        # section headline, the number, and nothing competing with the voice.
+        return {
+            "type": "data", "headline": heading, "highlight": highlight,
+            "body": "", "caption": heading, "query": "",
+            "dur": seg.get("dur", 6.0), "seed": seed,
+        }
+    query = _visual_query(text)
+    if len(query.split()) < 2:
+        query = str(section.get("visual_query") or heading or "")
+    # If no relevant stock photo exists, this becomes a keyword card carrying
+    # the one term this beat is about, so the screen changes with the voice.
+    keyword = _keyword(text, heading) or heading
+    return {
+        "type": "image", "headline": heading,
+        "keyword": keyword,
+        "body": "", "caption": heading, "query": query.lower(),
+        "center": (seed % 3 == 2),
+        "dur": seg.get("dur", 6.0), "seed": seed,
+    }
+
+
+def build_storyboard(sections: list[dict], blocks: list[dict],
+                     durs: list[float], niche: str, lang: str) -> list[dict]:
+    """Plan the whole video beat by beat before anything is rendered.
+
+    Each beat carries its narration, absolute start/end, and whether the screen
+    should show a data slide or a related image (with the search query).
+    """
+    story: list[dict] = []
+    offset = 0.0
+    for i, sec in enumerate(sections):
+        segs = []
+        if blocks and i < len(blocks):
+            segs = blocks[i].get("segments") or []
+        if not segs:
+            total = durs[i] if durs and i < len(durs) else 30.0
+            segs = split_segments(str(sec.get("narration", "")), total)
+        beats: list[dict] = []
+        t = offset
+        for j, seg in enumerate(segs):
+            plan = plan_segment_visual(seg, sec, niche, lang, i * 100 + j)
+            plan["start"] = round(t, 2)
+            plan["end"] = round(t + plan["dur"], 2)
+            plan["narration"] = seg["text"]
+            beats.append(plan)
+            t += plan["dur"]
+        story.append({
+            "section": i + 1,
+            "heading": sec.get("heading", ""),
+            "start": round(offset, 2),
+            "end": round(t, 2),
+            "beats": beats,
+        })
+        offset = t
+    return story
+
+
+def save_storyboard(story: list[dict], workdir: str) -> str:
+    """Write the storyboard as JSON (machine) and Markdown (human)."""
+    json_path = os.path.join(workdir, "storyboard.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(story, f, ensure_ascii=False, indent=2)
+
+    lines = ["# Storyboard", ""]
+    for sec in story:
+        lines.append(
+            f"## {sec['section']}. {sec['heading']}  "
+            f"({sec['start']}s \u2013 {sec['end']}s)"
+        )
+        lines.append("")
+        for b in sec["beats"]:
+            tag = "DATA" if b.get("type") == "data" else "IMAGE"
+            lines.append(
+                f"- **{b['start']}s\u2013{b['end']}s** [{tag}] "
+                f"{b.get('headline', '')}"
+            )
+            if b.get("highlight"):
+                lines.append(f"  - highlight: `{b['highlight']}`")
+            if b.get("keyword"):
+                lines.append(f"  - keyword: `{b['keyword']}`")
+            if b.get("query"):
+                lines.append(f"  - search: `{b['query']}`")
+            if b.get("visual"):
+                lines.append(
+                    f"  - visual: `{os.path.basename(b['visual'])}` "
+                    f"({b.get('visual_source', '?')})"
+                )
+            lines.append(f"  - says: {b.get('narration', '')}")
+            lines.append("")
+    with open(os.path.join(workdir, "storyboard.md"), "w",
+              encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return json_path
+
 
 class RenderError(RuntimeError):
     pass
@@ -265,6 +552,87 @@ def section_clip(image: str, audio: str, out: str, w: int, h: int,
     ], "section clip")
 
 
+def image_clip(image: str, out: str, w: int, h: int, dur: float,
+               zoom_in: bool) -> None:
+    """A silent Ken Burns clip for one visual, used inside a section."""
+    dur = max(0.4, float(dur or 0))
+    ow, oh = int(w * 1.28), int(h * 1.28)
+    step = 0.14 / max(1.0, dur * FPS)
+    if zoom_in:
+        zexpr = f"min(1+{step:.6f}*on,1.14)"
+    else:
+        zexpr = f"max(1.14-{step:.6f}*on,1.0)"
+    vf = (
+        f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+        f"crop={ow}:{oh},"
+        f"zoompan=z='{zexpr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d=1:s={w}x{h}:fps={FPS},"
+        f"eq=contrast=1.04:saturation=1.06:brightness=-0.01,"
+        f"vignette=PI/5,"
+        f"format=yuv420p"
+    )
+    run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-loop", "1", "-framerate", str(FPS), "-i", image,
+        "-t", f"{dur:.3f}",
+        "-vf", vf,
+        "-an",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-pix_fmt", "yuv420p", "-r", str(FPS),
+        "-movflags", "+faststart",
+        out,
+    ], "image clip")
+
+
+def mux_audio(video: str, audio: str, out: str) -> None:
+    """Attach the section narration to a silent section video."""
+    run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", video, "-i", audio,
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+        "-shortest", "-movflags", "+faststart",
+        out,
+    ], "mux audio")
+
+
+def section_clip_multi(visuals: list[dict], audio: str, out: str, w: int,
+                       h: int, total_dur: float, workdir: str,
+                       section_idx: int) -> None:
+    """Build one section from several beat visuals, then attach its audio."""
+    n = max(1, len(visuals))
+    # Durations come from the storyboard beats. If a caller hands over bare
+    # visuals without them, split the section evenly instead of writing 0-second
+    # clips (which produce an empty, streamless mp4).
+    weights = [float(v.get("dur") or 0) for v in visuals]
+    if sum(weights) <= 0:
+        weights = [1.0] * n
+    total_vis = sum(weights)
+    parts: list[str] = []
+    acc = 0.0
+    for k, v in enumerate(visuals):
+        d = weights[k] * total_dur / total_vis
+        if k == n - 1:
+            d = max(0.6, total_dur - acc)
+        part = os.path.join(workdir, f"s{section_idx}_p{k:02d}.mp4")
+        image_clip(v["path"], part, w, h, d,
+                   zoom_in=((section_idx + k) % 2 == 0))
+        parts.append(part)
+        acc += d
+    raw = os.path.join(workdir, f"s{section_idx}_raw.mp4")
+    concat(parts, raw, workdir)
+    mux_audio(raw, audio, out)
+    for p in parts:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    try:
+        os.remove(raw)
+    except OSError:
+        pass
+
+
 def concat(clips: list[str], out: str, workdir: str) -> None:
     lst = os.path.join(workdir, "concat.txt")
     with open(lst, "w", encoding="utf-8") as f:
@@ -335,27 +703,6 @@ def make_preview(src: str, out: str, h: int = 480) -> None:
 # orchestration
 # --------------------------------------------------------------------------- #
 
-def _slug(text: str, n: int = 40) -> str:
-    s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "section")).strip("-").lower()
-    return (s[:n] or "section")
-
-
-def plan_images(sections: list[dict], niche: str) -> list[dict]:
-    out = []
-    for i, s in enumerate(sections):
-        note = str(s.get("visual_note") or "").strip()
-        heading = str(s.get("heading") or "").strip()
-        query = str(s.get("visual_query") or "").strip() or heading or note
-        base = note or heading
-        prompt = (
-            f"{base}. Subject: {heading}. Context: a video about {niche}. "
-            f"Wide cinematic composition"
-        )
-        out.append({"prompt": prompt, "caption": heading or note,
-                    "query": query, "seed": 1000 + i * 137})
-    return out
-
-
 async def narrate(sections: list[dict], lang: str, workdir: str,
                   progress=None) -> dict:
     """Stage 1: speak every section, keep word timings."""
@@ -368,7 +715,11 @@ async def narrate(sections: list[dict], lang: str, workdir: str,
         v = (await voice.synth_many([(str(sec.get("narration", "")), audio)], lang))[0]
         durs.append(v["duration"])
         audios.append(audio)
-        blocks.append({"words": v["words"], "offset": offset})
+        blocks.append({
+            "words": v["words"], "offset": offset,
+            "segments": split_segments(str(sec.get("narration", "")),
+                                       v["duration"]),
+        })
         headings.append({"text": str(sec.get("heading", "")), "start": offset,
                          "end": offset + min(4.5, v["duration"])})
         offset += v["duration"]
@@ -376,25 +727,54 @@ async def narrate(sections: list[dict], lang: str, workdir: str,
             "audios": audios, "total": round(offset, 3)}
 
 
-async def illustrate(sections: list[dict], niche: str, lang: str, workdir: str,
-                     w: int, h: int) -> list[dict]:
-    """Stage 2: one still per section."""
-    return await visual.build_images(plan_images(sections, niche), workdir, w, h, lang)
+async def illustrate(story: list[dict], niche: str, lang: str, workdir: str,
+                     w: int, h: int, concurrency: int = 4) -> list[list[dict]]:
+    """Stage 2: build one visual per storyboard beat, grouped back per section.
+
+    Data beats become slide cards; image beats search free stock and fall back
+    to a slide. The returned groups are what Assemble cuts on, so the picture
+    changes with the narration rather than once per section.
+    """
+    plans = [b for sec in story for b in sec.get("beats", [])]
+    if not plans:
+        raise RenderError("storyboard has no beats")
+    visuals = await visual.build_visuals(plans, workdir, w, h, lang,
+                                         concurrency=concurrency)
+    groups: list[list[dict]] = []
+    k = 0
+    for sec in story:
+        n = len(sec.get("beats", []))
+        group = visuals[k:k + n]
+        groups.append(group)
+        for beat, vis in zip(sec.get("beats", []), group):
+            # build_visuals returns the media record only; carry the beat's
+            # timing and plan forward so the cutter knows how long to hold it.
+            for field in ("dur", "start", "end", "highlight", "narration"):
+                if field in beat and field not in vis:
+                    vis[field] = beat[field]
+            beat["visual"] = vis.get("path", "")
+            beat["visual_source"] = vis.get("source", "")
+        k += n
+    return groups
 
 
 def assemble(video_id: int, script: dict, channel: dict, workdir: str,
              blocks: list[dict], headings: list[dict], durs: list[float],
-             images: list[dict], w: int, h: int, total: float,
+             groups: list[list[dict]], w: int, h: int, total: float,
              progress=None) -> dict:
-    """Stage 3: clips -> concat -> captions, disclaimer, loudness -> master."""
+    """Stage 3: beat visuals -> section clips -> concat -> captions -> master."""
     lang = channel.get("language", "en")
     clips = []
-    for i, im in enumerate(images):
+    for i, group in enumerate(groups):
         clip = os.path.join(workdir, f"sec_{i:02d}.mp4")
         audio = os.path.join(workdir, f"a{i:02d}.mp3")
         if progress:
-            progress(f"clip {i+1}/{len(images)}")
-        section_clip(im["path"], audio, clip, w, h, durs[i], zoom_in=(i % 2 == 0))
+            progress(f"clip {i+1}/{len(groups)}: {len(group)} visual(s)")
+        if len(group) == 1:
+            section_clip(group[0]["path"], audio, clip, w, h, durs[i],
+                         zoom_in=(i % 2 == 0))
+        else:
+            section_clip_multi(group, audio, clip, w, h, durs[i], workdir, i)
         clips.append(clip)
 
     raw = os.path.join(workdir, "raw.mp4")
@@ -415,7 +795,7 @@ def assemble(video_id: int, script: dict, channel: dict, workdir: str,
     make_preview(master, preview)
 
     # Intermediates are large and useless once the master exists.
-    for i in range(len(images)):
+    for i in range(len(groups)):
         for name in (f"sec_{i:02d}.mp4", f"a{i:02d}.mp3"):
             try:
                 os.remove(os.path.join(workdir, name))
@@ -426,14 +806,17 @@ def assemble(video_id: int, script: dict, channel: dict, workdir: str,
     except OSError:
         pass
 
+    flat = [v for g in groups for v in g]
     info = probe(master)
     return {
         "master": master, "preview": preview,
         "duration": info["duration"], "width": info["width"],
         "height": info["height"], "vcodec": info["vcodec"],
         "acodec": info["acodec"], "size": info["size"],
-        "overlay": disc, "sections": len(images),
-        "sources": [im.get("source") for im in images],
+        "overlay": disc, "sections": len(groups),
+        "beats": len(flat),
+        "data_slides": sum(1 for v in flat if v.get("type") == "data"),
+        "sources": [v.get("source") for v in flat],
     }
 
 
@@ -453,11 +836,21 @@ async def render_long(script: dict, channel: dict, video_id: int, work_root: str
     n = await narrate(sections, lang, workdir, progress)
     if progress:
         progress(f"total narration {n['total']}s")
-    imgs = await illustrate(sections, channel.get("niche", ""), lang, workdir, w, h)
-    return await asyncio.to_thread(
+
+    story = build_storyboard(sections, n["blocks"], n["durs"],
+                             channel.get("niche", ""), lang)
+    save_storyboard(story, workdir)
+    if progress:
+        beats = sum(len(s["beats"]) for s in story)
+        progress(f"storyboard: {beats} beats planned")
+    groups = await illustrate(story, channel.get("niche", ""), lang, workdir, w, h)
+    save_storyboard(story, workdir)  # rewrite with the chosen visual per beat
+    out = await asyncio.to_thread(
         assemble, video_id, script, channel, workdir, n["blocks"],
-        n["headings"], n["durs"], imgs, w, h, n["total"], progress,
+        n["headings"], n["durs"], groups, w, h, n["total"], progress,
     )
+    out["storyboard"] = os.path.join(workdir, "storyboard.json")
+    return out
 
 
 async def render_short(short: dict, script: dict, channel: dict, video_id: int,

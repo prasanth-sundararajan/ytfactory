@@ -207,7 +207,7 @@ def summary_text(ctx: dict) -> str:
         if im:
             lines.append(
                 f"<b>Visuals</b>: {im.get('stock_images', 0)} stock \u00b7 "
-                f"{im.get('fallback_images', 0)} generated"
+                f"{im.get('cards', 0)} designed cards"
             )
         shorts = r.get("shorts") or []
         if shorts:

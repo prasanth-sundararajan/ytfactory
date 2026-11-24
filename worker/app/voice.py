@@ -37,8 +37,15 @@ def probe_duration(path: str) -> float:
 
 
 async def _one(text: str, voice: str, out_path: str) -> list[dict]:
-    comm = edge_tts.Communicate(text, voice, rate="+0%")
+    # edge-tts 7.3 defaults to sentence-level events; ask for word-level so
+    # captions and beat timing stay tight. Older releases have no such option.
+    try:
+        comm = edge_tts.Communicate(text, voice, rate="+0%",
+                                    boundary="WordBoundary")
+    except TypeError:
+        comm = edge_tts.Communicate(text, voice, rate="+0%")
     words: list[dict] = []
+    sentences: list[dict] = []
     wrote = 0
     with open(out_path, "wb") as f:
         async for chunk in comm.stream():
@@ -52,8 +59,40 @@ async def _one(text: str, voice: str, out_path: str) -> list[dict]:
                     "s": round(start, 3),
                     "e": round(start + chunk["duration"] / 1e7, 3),
                 })
+            elif chunk["type"] == "SentenceBoundary":
+                start = chunk["offset"] / 1e7
+                sentences.append({
+                    "text": str(chunk.get("text") or ""),
+                    "s": round(start, 3),
+                    "e": round(start + chunk["duration"] / 1e7, 3),
+                })
     if wrote < 4000:
         raise VoiceError("audio stream was empty")
+    if not words and sentences:
+        words = _words_from_sentences(sentences)
+    return words
+
+
+def _words_from_sentences(sentences: list[dict]) -> list[dict]:
+    """Spread words evenly (by length) inside each sentence window.
+
+    Used only when the service returns sentence events instead of word events,
+    so captions still appear and stay close to the audio.
+    """
+    words: list[dict] = []
+    for sent in sentences:
+        parts = [p for p in re.split(r"\s+", sent["text"].strip()) if p]
+        if not parts:
+            continue
+        span = max(0.05, sent["e"] - sent["s"])
+        weights = [len(p) + 1 for p in parts]
+        total = float(sum(weights))
+        cursor = sent["s"]
+        for part, weight in zip(parts, weights):
+            step = span * weight / total
+            words.append({"w": part, "s": round(cursor, 3),
+                          "e": round(cursor + step, 3)})
+            cursor += step
     return words
 
 

@@ -1,11 +1,14 @@
-"""Visuals: one still per section, from free sources, with a guaranteed fallback.
+"""Visuals: one still per storyboard beat, with a guaranteed fallback.
 
-Order: Openverse (CC0 / public domain) -> Wikimedia Commons (free licences only)
--> a generated gradient card. The last option always works, so a render can never
-fail because an image service is down.
+Long videos plan each beat as a data slide or a key-phrase card, and only use a
+stock photo when `PEXELS_API_KEY` is set: keyword-matched free libraries return
+art scans and manuscripts for finance topics, which look worse than a clean
+card. Shorts still try Openverse (CC0 / public domain) then Wikimedia Commons
+(free licences only) before falling back to a generated card, so a render can
+never fail because an image service is down.
 
-No paid or key-requiring service is used here. Every image is either explicitly
-CC0/public domain or comes with a credit line that the publisher can print.
+Every stock image is explicitly CC0/public domain or comes with a credit line
+that the publisher can print.
 """
 
 import asyncio
@@ -13,10 +16,11 @@ import glob
 import hashlib
 import logging
 import os
+import re
 import urllib.parse
 
 import httpx
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 log = logging.getLogger("visual")
 
@@ -104,12 +108,202 @@ def _gradient_card(text: str, out_path: str, w: int, h: int, seed: int,
     img.save(out_path, "JPEG", quality=90)
 
 
+def _wrap_text(draw, text: str, font, max_w: float, max_lines: int = 4) -> list[str]:
+    """Greedy word wrap that never exceeds max_lines."""
+    words = str(text or "").split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        trial = (cur + " " + w).strip()
+        if draw.textlength(trial, font=font) <= max_w or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = w
+            if len(lines) >= max_lines:
+                break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    if len(lines) == max_lines:
+        used = sum(len(x.split()) for x in lines)
+        if used < len(words):
+            lines[-1] = lines[-1].rstrip(" ,.;:") + "\u2026"
+    return lines
+
+
+def _fit_font(draw, text: str, path: str, size: int, max_w: float,
+              min_size: int = 24) -> ImageFont.FreeTypeFont:
+    """Shrink the size until the text fits on one line."""
+    size = max(min_size, size)
+    while size > min_size:
+        font = ImageFont.truetype(path, size)
+        if draw.textlength(text, font=font) <= max_w:
+            return font
+        size -= max(2, size // 18)
+    return ImageFont.truetype(path, min_size)
+
+
+def slide_card(spec: dict, out_path: str, w: int, h: int, lang: str = "en") -> None:
+    """A data slide (big number) or a quote card (the spoken line).
+
+    The palette is deliberately mid-navy, not black: the render pass adds a
+    vignette and the QC gate rejects frames that average near-black.
+    """
+    seed = int(spec.get("seed") or 7)
+    hsh = hashlib.sha256(
+        f"{seed}:{spec.get('headline', '')}".encode("utf-8")
+    ).digest()
+    top = (30 + hsh[0] % 20, 44 + hsh[1] % 22, 68 + hsh[2] % 26)
+    bot = (18, 26, 44)
+    img = Image.new("RGB", (w, h), top)
+    draw = ImageDraw.Draw(img)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        draw.line([(0, y), (w, y)], fill=(
+            int(top[0] * (1 - t) + bot[0] * t),
+            int(top[1] * (1 - t) + bot[1] * t),
+            int(top[2] * (1 - t) + bot[2] * t),
+        ))
+    # Accent bar alternates sides so consecutive cards do not look identical.
+    bar_w = max(6, int(w * 0.012))
+    if seed % 2:
+        draw.rectangle([w - bar_w, 0, w, h], fill=(34, 197, 94))
+    else:
+        draw.rectangle([0, 0, bar_w, h], fill=(34, 197, 94))
+
+    fp = font_path(lang)
+    kick_f = ImageFont.truetype(fp, int(h * 0.030))
+    small_f = ImageFont.truetype(fp, int(h * 0.024))
+
+    x = int(w * 0.075)
+    max_w = int(w * 0.82)
+    center = bool(spec.get("center"))
+    highlight = str(spec.get("highlight") or "").strip()
+    keyword = str(spec.get("keyword") or "").strip()
+    headline = str(spec.get("headline") or "").strip()
+
+    def kicker(y0: int) -> int:
+        if not headline:
+            return y0
+        for line in _wrap_text(draw, headline, kick_f, max_w, 1):
+            tx = x
+            if center:
+                tx = max(x, int((w - draw.textlength(line, font=kick_f)) / 2))
+            draw.text((tx, y0), line, font=kick_f, fill=(146, 162, 182))
+            y0 += int(h * 0.048)
+        return y0
+
+    if highlight:
+        hi_f = _fit_font(draw, highlight, fp, int(h * 0.150), max_w)
+        block_h = int(h * 0.185) + (int(h * 0.048) if headline else 0)
+        y = max(int(h * 0.20), int((h - block_h) / 2))
+        draw.text((x, y), highlight, font=hi_f, fill=(52, 211, 153))
+        y += int(h * 0.185)
+        kicker(y)
+    else:
+        word = keyword or headline
+        word_f = _fit_font(draw, word, fp, int(h * 0.125), max_w)
+        step = int(h * 0.150)
+        block_h = step + (int(h * 0.048) if headline else 0)
+        y = max(int(h * 0.20), int((h - block_h) / 2))
+        y = kicker(y)
+        tx = x
+        if center:
+            tx = max(x, int((w - draw.textlength(word, font=word_f)) / 2))
+        draw.text((tx, y), word, font=word_f, fill=(52, 211, 153))
+
+    draw.text((x, h - int(h * 0.06)), "YT Factory", font=small_f,
+              fill=(120, 136, 156))
+    img.save(out_path, "JPEG", quality=92)
+
+
 def _query(item: dict) -> str:
     """A short, searchable phrase: the visual note first, then the heading."""
     raw = str(item.get("query") or item.get("caption") or item.get("prompt") or "")
     raw = raw.replace("[VERIFY]", " ")
     words = [w for w in raw.replace("/", " ").split() if w.isalpha() or w.isdigit()]
     return " ".join(words[:8])
+
+
+# Stock libraries index concrete subjects, not narration. Mapping the topic
+# vocabulary to photographable objects is what turns "claim old tax regime"
+# into "tax documents calculator", which actually returns a picture.
+CONCEPTS = [
+    ("mutual fund", "stock market chart"),
+    ("capital gain", "stock market chart"),
+    ("sip", "investment growth chart"),
+    ("nps", "pension retirement savings"),
+    ("pension", "retirement savings"),
+    ("insurance", "insurance policy document"),
+    ("credit card", "credit card payment"),
+    ("loan", "loan documents signing"),
+    ("rent", "rent agreement paperwork"),
+    ("salary", "salary payslip office"),
+    ("payslip", "salary payslip office"),
+    ("itr", "tax form paperwork"),
+    ("tax", "tax documents calculator"),
+    ("gst", "invoice paperwork"),
+    ("bank", "bank passbook"),
+    ("budget", "budget planning notebook"),
+    ("saving", "savings coins jar"),
+    ("invest", "investment growth chart"),
+    ("fraud", "phone scam warning"),
+    ("claim", "documents signing pen"),
+    ("form", "filling form pen"),
+    ("deadline", "calendar deadline clock"),
+    ("document", "documents paperwork desk"),
+    ("account", "bank account passbook"),
+    ("interest", "interest rate chart"),
+    ("payment", "online payment phone"),
+    ("salary slip", "salary payslip office"),
+]
+
+
+def _query_variants(item: dict) -> list[str]:
+    """Search phrases from most to least specific, best first."""
+    q = _query(item)
+    head = _query({"query": item.get("headline") or item.get("caption") or ""})
+    low = (q + " " + head).lower()
+
+    out: list[str] = []
+    hits: list[str] = []
+    for key, stock in CONCEPTS:
+        if key in low and stock not in hits:
+            hits.append(stock)
+    out.extend(hits[:2])
+
+    words = q.split()
+    if len(words) >= 2:
+        out.append(" ".join(words[:4]))
+    if len(words) >= 3:
+        out.append(" ".join(words[:2]))
+    if head:
+        out.append(" ".join(head.split()[:3]))
+
+    seen, uniq = set(), []
+    for v in out:
+        v = " ".join(v.split())
+        if v and v not in seen:
+            seen.add(v)
+            uniq.append(v)
+    return uniq[:3] or [q or "finance"]
+
+
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z]{4,}", (text or "").lower()))
+
+
+def _relevant(query: str, haystack: str) -> bool:
+    """Reject a photo whose title/tags share almost nothing with the query.
+
+    Without this, a Commons search for 'old tax regime' happily returns a
+    1789 French Revolution engraving, which is worse than a clean text card.
+    """
+    q = _tokens(query)
+    if not q:
+        return True
+    need = max(1, min(2, len(q)))
+    return len(q & _tokens(haystack)) >= need
 
 
 async def _download(client, url: str, out_path: str, w: int, h: int) -> bool:
@@ -209,6 +403,12 @@ async def _openverse(client, query: str, out_path: str, w: int, h: int,
                 continue
             if (item.get("width") or 0) < 1000 or (item.get("height") or 0) < 560:
                 continue
+            tags = " ".join(str(t.get("name") or "") for t in
+                            (item.get("tags") or []) if isinstance(t, dict))
+            hay = " ".join([str(item.get("title") or ""),
+                            str(item.get("description") or ""), tags])
+            if not _relevant(query, hay):
+                continue
             if await _download(client, url, out_path, w, h):
                 used.add(url)
                 return {
@@ -252,6 +452,11 @@ async def _commons(client, query: str, out_path: str, w: int, h: int,
         if not url or url in used:
             continue
         if (info.get("width") or 0) < 900:
+            continue
+        desc = re.sub(r"<[^>]+>", " ", str(
+            (meta.get("ImageDescription") or {}).get("value") or ""))
+        hay = " ".join([str(page.get("title") or ""), desc])
+        if not _relevant(query, hay):
             continue
         if await _download(client, url, out_path, w, h):
             used.add(url)
@@ -307,4 +512,62 @@ async def build_images(prompts: list[dict], out_dir: str, w: int, h: int,
                          source, query[:40])
 
         await asyncio.gather(*(one(i, p) for i, p in enumerate(prompts)))
+    return results
+
+
+async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
+                        lang: str = "en", concurrency: int = 3) -> list[dict]:
+    """Build one visual per narration beat.
+
+    A plan with type "data" becomes a slide card (no network). An "image" plan
+    searches free stock first, and falls back to a text slide if nothing fits -
+    so the screen is never a blank gradient.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    sem = asyncio.Semaphore(concurrency)
+    used: set[str] = set()
+    results: list[dict] = [None] * len(plans)  # type: ignore[list-item]
+
+    async with httpx.AsyncClient(headers={"User-Agent": UA},
+                                 follow_redirects=True) as client:
+        key = (os.environ.get("PEXELS_API_KEY") or "").strip()
+
+        async def one(i: int, item: dict) -> None:
+            async with sem:
+                path = os.path.join(out_dir, f"vis_{i:03d}.jpg")
+                if item.get("type") == "data":
+                    slide_card(item, path, w, h, lang)
+                    results[i] = {
+                        "path": path, "source": "slide", "type": "data",
+                        "query": "", "headline": item.get("headline", ""),
+                        "credit": "", "source_url": "",
+                    }
+                    return
+                variants = _query_variants(item)
+                query = variants[0]
+                found = None
+                source = "slide"
+                # Pexels is the only keyless-quality source. Openverse and
+                # Commons match keywords but return art scans and manuscripts,
+                # so a clean card beats an unrelated picture every time.
+                if key:
+                    for q in variants:
+                        found = await _pexels(client, q, path, w, h, used, key)
+                        if found:
+                            query = q
+                            source = "pexels"
+                            break
+                if not found:
+                    slide_card(item, path, w, h, lang)
+                    source = "slide"
+                results[i] = {
+                    "path": path, "source": source, "type": "image",
+                    "query": query, "headline": item.get("headline", ""),
+                    "credit": (found or {}).get("credit", ""),
+                    "source_url": (found or {}).get("source_url", ""),
+                }
+                log.info("visual %d/%d via %s (%s)", i + 1, len(plans),
+                         source, query[:40])
+
+        await asyncio.gather(*(one(i, p) for i, p in enumerate(plans)))
     return results

@@ -124,7 +124,11 @@ async def _main(slug: str, show_json: bool, render: bool,
         print("VIDEO  : %sx%s  %.1fs  %.1f MB  %s/%s"
               % (r.get("width"), r.get("height"), r.get("duration", 0),
                  r.get("size", 0) / 1e6, r.get("vcodec"), r.get("acodec")))
-        print("VISUALS:", ctx["out"].get("visual", {}).get("sources"))
+        vinfo = ctx["out"].get("visual", {})
+        print("VISUALS: %d beats, %d data slides, %d stock images, %d cards"
+              % (vinfo.get("beats", 0), vinfo.get("data_slides", 0),
+                 vinfo.get("stock_images", 0), vinfo.get("cards", 0)))
+        print("STORYBOARD:", vinfo.get("storyboard"))
         for s in r.get("shorts") or []:
             if s.get("error"):
                 print("SHORT %s FAILED: %s" % (s.get("index"), s["error"][:200]))
