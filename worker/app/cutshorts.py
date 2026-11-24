@@ -185,10 +185,10 @@ def _render_one(idx: int, win: tuple[int, int], beats: list[dict], blocks: list[
     _vertical(raw169, master, t0, dur, rawv)
 
     ass = os.path.join(sdir, "captions.ass")
-    # No burned-in narration captions: YouTube provides subtitles.
-    # BURN_CAPTIONS_SHORTS=1 brings them back.
+    # Narration captions burned in by default.
+    # BURN_CAPTIONS_SHORTS=0 turns them off.
     caps = ([{"words": words_for(blocks, t0, t1), "offset": 0.0}]
-            if os.environ.get("BURN_CAPTIONS_SHORTS", "0") == "1" else [])
+            if os.environ.get("BURN_CAPTIONS_SHORTS", "1") == "1" else [])
     R.build_ass(ass, W, H, lang, caps,
                 [{"text": title, "start": 0.0, "end": min(4.0, dur)}],
                 disclaimer=disclaimer, total=dur, full_disclaimer=full_disc,
