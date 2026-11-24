@@ -17,6 +17,8 @@ class CFG:
     redis_url: str = os.environ.get("REDIS_URL", "redis://redis:6379/0")
     gemini_key: str = os.environ.get("GEMINI_API_KEY", "")
     groq_key: str = os.environ.get("GROQ_API_KEY", "")
+    deepseek_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
+    deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
     serper_key: str = os.environ.get("SERPER_API_KEY", "")
     pexels_key: str = os.environ.get("PEXELS_API_KEY", "")
     state_path: str = os.environ.get("STATE_PATH", "/app/data/state.json")

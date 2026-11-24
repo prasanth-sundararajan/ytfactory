@@ -443,10 +443,20 @@ def _one_line_size(text: str, lang: str, size: int, max_w: float) -> int:
     return max(16, size)
 
 
+def _wrap_heading(text: str, width: int) -> str:
+    """Escape for ASS and, on narrow screens, break into centred lines."""
+    if width <= 0:
+        return _ass_escape(text)
+    import textwrap
+    lines = textwrap.wrap(str(text), width) or [""]
+    return "\\N".join(_ass_escape(x) for x in lines[:3])
+
+
 def build_ass(path: str, w: int, h: int, lang: str,
               caption_blocks: list[dict], headings: list[dict],
               disclaimer: str = "", total: float = 0.0,
-              start_s: float = 5.0, end_s: float = 5.0) -> None:
+              start_s: float = 5.0, end_s: float = 5.0,
+              full_disclaimer: str = "", full_seconds: float = 5.0) -> None:
     """captions + headings + the disclaimer banner, all in one subtitle track.
 
     The disclaimer lives here rather than in a drawtext filter because libass
@@ -454,11 +464,13 @@ def build_ass(path: str, w: int, h: int, lang: str,
     build. It is one line, drawn over the running video, at the start and end.
     """
     font_name = "Noto Sans Tamil" if lang == "ta" else "Noto Sans"
-    cap_size = int(h * 0.050)
-    head_size = int(h * 0.042)
+    vertical = h > w
+    cap_size = int(h * (0.036 if vertical else 0.050))
+    head_size = int(h * (0.034 if vertical else 0.042))
     margin_v = int(h * 0.075)
     disc_size = _one_line_size(disclaimer or " ", lang, int(h * 0.030),
                                w * 0.86)
+    full_size = int(h * (0.031 if vertical else 0.036))
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -472,18 +484,19 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Cap,{font_name},{cap_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,3,0,2,{int(w*0.06)},{int(w*0.06)},{margin_v},1
 Style: Head,{font_name},{head_size},&H00E8E8E8,&H00FFFFFF,&H00101010,&HA0000000,-1,0,0,0,100,100,0,0,1,2,0,8,{int(w*0.06)},{int(w*0.06)},{int(h*0.055)},1
 Style: Disc,{font_name},{disc_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H8C000000,-1,0,0,0,100,100,0,0,4,{int(h*0.011)},0,8,{int(w*0.05)},{int(w*0.05)},{int(h*0.145)},1
+Style: Full,{font_name},{full_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&HB4000000,-1,0,0,0,100,100,0,0,4,{int(h*0.012)},0,5,{int(w*0.07)},{int(w*0.07)},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
-    max_chars = 34 if lang == "ta" else 46
-    max_words = 6 if lang == "ta" else 8
+    max_chars = (16 if lang == "ta" else 21) if vertical else (34 if lang == "ta" else 46)
+    max_words = (3 if lang == "ta" else 4) if vertical else (6 if lang == "ta" else 8)
 
     for hd in headings:
         lines.append(
             f"Dialogue: 0,{_ass_time(hd['start'])},{_ass_time(hd['end'])},Head,,0,0,0,,"
-            f"{_ass_escape(hd['text'])}\n"
+            f"{_wrap_heading(hd['text'], 22 if vertical else 0)}\n"
         )
 
     if disclaimer and total > 0:
@@ -491,12 +504,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         a0, a1 = 0.4, min(start_s, max(0.6, total - 0.2))
         b0 = max(a1 + 0.1, total - end_s)
         b1 = max(b0 + 0.1, total - 0.15)
-        lines.append(
-            f"Dialogue: 0,{_ass_time(a0)},{_ass_time(a1)},Disc,,0,0,0,,{text}\n"
-        )
-        lines.append(
-            f"Dialogue: 0,{_ass_time(b0)},{_ass_time(b1)},Disc,,0,0,0,,{text}\n"
-        )
+        if not full_disclaimer.strip():  # the full end card replaces the start banner
+            lines.append(
+                f"Dialogue: 0,{_ass_time(a0)},{_ass_time(a1)},Disc,,0,0,0,,{text}\n"
+            )
+        if full_disclaimer.strip():
+            import textwrap
+            card_s = max(a1 + 0.3, total - full_seconds)  # last N seconds (5 long, 2 Shorts)
+            wrapped = "\\N".join(_ass_escape(x) for x in textwrap.wrap(
+                " ".join(full_disclaimer.split()), 27 if vertical else 62))
+            lines.append(
+                f"Dialogue: 1,{_ass_time(card_s)},{_ass_time(max(card_s + 0.5, total - 0.05))},"
+                f"Full,,0,0,0,,{wrapped}\n"
+            )
+        else:
+            lines.append(
+                f"Dialogue: 0,{_ass_time(b0)},{_ass_time(b1)},Disc,,0,0,0,,{text}\n"
+            )
 
     for blk in caption_blocks:
         for grp in _group(blk["words"], max_chars, max_words):
@@ -552,10 +576,66 @@ def section_clip(image: str, audio: str, out: str, w: int, h: int,
     ], "section clip")
 
 
+PALETTES = [  # four-colour loops for the animated card background
+    ("0x12306e", "0x11a3c9", "0x7c3aed", "0x12306e"),
+    ("0x2a1065", "0xc026d3", "0x2563eb", "0x2a1065"),
+    ("0x0b3b4f", "0x10b981", "0x2563eb", "0x0b3b4f"),
+    ("0x1e2a78", "0x3b82f6", "0x06b6d4", "0x1e2a78"),
+]
+
+
+def _orb(path: str, rgb: tuple, size: int = 900) -> None:
+    """A soft glowing circle (transparent PNG) that drifts over the background."""
+    from PIL import Image
+    g = Image.radial_gradient("L").resize((size, size))
+    alpha = g.point(lambda v: max(0, int((255 - min(255, v * 1.45)) * 0.45)))
+    im = Image.new("RGBA", (size, size), rgb + (0,))
+    im.putalpha(alpha)
+    im.save(path, "PNG")
+
+
+def animated_card_clip(fg: str, out: str, w: int, h: int, dur: float, seed: int,
+                       workdir: str) -> None:
+    """Moving gradient + two drifting light orbs, with the card sliding up and fading in."""
+    pal = PALETTES[int(seed or 0) % len(PALETTES)]
+    o1, o2 = os.path.join(workdir, "orb_a.png"), os.path.join(workdir, "orb_b.png")
+    if not os.path.exists(o1):
+        _orb(o1, (120, 220, 255))
+    if not os.path.exists(o2):
+        _orb(o2, (255, 190, 90))
+    bg = (f"gradients=s={w}x{h}:c0={pal[0]}:c1={pal[1]}:c2={pal[2]}:c3={pal[3]}:"
+          f"nb_colors=4:speed=0.035:rate={FPS}:d={dur:.3f}")
+    fc = (
+        "[1:v]format=rgba,fade=t=in:st=0:d=0.45:alpha=1[fg];"
+        "[2:v]format=rgba[o1];[3:v]format=rgba[o2];"
+        "[0:v]format=rgba[bg];"
+        "[bg][o1]overlay=format=auto:x='W*0.10+W*0.16*sin(t*0.5)':y='H*0.05+H*0.14*cos(t*0.4)':shortest=1[b1];"
+        "[b1][o2]overlay=format=auto:x='W*0.55+W*0.14*cos(t*0.45)':y='H*0.40+H*0.12*sin(t*0.55)':shortest=1[b2];"
+        "[b2][fg]overlay=format=auto:x=0:y='38*pow(max(0,1-t/0.5),2)':shortest=1,"
+        "eq=contrast=1.05:saturation=1.15:brightness=0.02,vignette=PI/7,format=yuv420p"
+    )
+    run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", bg,
+        "-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", fg,
+        "-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", o1,
+        "-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", o2,
+        "-filter_complex", fc, "-an", "-t", f"{dur:.3f}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-pix_fmt", "yuv420p", "-r", str(FPS), "-movflags", "+faststart", out,
+    ], "animated card")
+
+
 def image_clip(image: str, out: str, w: int, h: int, dur: float,
-               zoom_in: bool) -> None:
-    """A silent Ken Burns clip for one visual, used inside a section."""
+               zoom_in: bool, fg: str = "", seed: int = 0) -> None:
+    """A silent clip for one visual: animated card if a foreground exists, else Ken Burns."""
     dur = max(0.4, float(dur or 0))
+    if fg and os.path.exists(fg):
+        try:
+            animated_card_clip(fg, out, w, h, dur, seed, os.path.dirname(out))
+            return
+        except Exception as e:  # never lose a clip over an effect
+            log.warning("animated card failed, using still: %s", str(e)[:120])
     ow, oh = int(w * 1.28), int(h * 1.28)
     step = 0.14 / max(1.0, dur * FPS)
     if zoom_in:
@@ -616,7 +696,8 @@ def section_clip_multi(visuals: list[dict], audio: str, out: str, w: int,
             d = max(0.6, total_dur - acc)
         part = os.path.join(workdir, f"s{section_idx}_p{k:02d}.mp4")
         image_clip(v["path"], part, w, h, d,
-                   zoom_in=((section_idx + k) % 2 == 0))
+                   zoom_in=((section_idx + k) % 2 == 0),
+                   fg=v.get("fg") or "", seed=int(v.get("seed") or k))
         parts.append(part)
         acc += d
     raw = os.path.join(workdir, f"s{section_idx}_raw.mp4")
@@ -783,8 +864,12 @@ def assemble(video_id: int, script: dict, channel: dict, workdir: str,
     disc = str(script.get("disclaimer_short")
                or "Educational content only. Not professional advice.")
     ass_path = os.path.join(workdir, "captions.ass")
-    build_ass(ass_path, w, h, lang, blocks, headings,
-              disclaimer=disc, total=total)
+    # Narration captions are burned in by default (they look better than YouTube CC).
+    # Set BURN_CAPTIONS_LONG=0 to rely on YouTube subtitles instead.
+    burn = os.environ.get("BURN_CAPTIONS_LONG", "1") == "1"
+    build_ass(ass_path, w, h, lang, blocks if burn else [], headings,
+              disclaimer=disc, total=total,
+              full_disclaimer=str(script.get("disclaimer") or ""))
 
     master = os.path.join(workdir, "master_1080p.mp4")
     if progress:
@@ -889,7 +974,9 @@ async def render_short(short: dict, script: dict, channel: dict, video_id: int,
               [{"words": v["words"], "offset": 0.0}],
               [{"text": str(short.get("title", "")), "start": 0.0,
                 "end": min(4.0, dur)}],
-              disclaimer=disc, total=dur)
+              disclaimer=disc, total=dur,
+              full_disclaimer=str(script.get("disclaimer") or ""),
+              full_seconds=2.0)
 
     master = os.path.join(workdir, "short_1080x1920.mp4")
     await asyncio.to_thread(finish, clip, ass_path, master, dur)

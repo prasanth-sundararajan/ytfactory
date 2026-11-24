@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import html
 import json
+import os
 import logging
 import re
 import urllib.parse
@@ -172,7 +173,30 @@ async def _ddg(client, query, num):
     return items
 
 
+async def _tavily(client, query, num):
+    """Tavily free tier (1,000 credits a month). `site:x` in the query becomes a domain filter."""
+    key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("TAVILY_API_KEY not set")
+    sites = re.findall(r"site:(\S+)", query)
+    q = re.sub(r"site:\S+", "", query).strip()
+    body = {"query": q, "max_results": min(num, 10), "search_depth": "basic"}
+    if sites:
+        body["include_domains"] = sites
+    r = await client.post("https://api.tavily.com/search", json=body, timeout=30,
+                          headers={"Authorization": "Bearer " + key})
+    if r.status_code != 200:
+        raise RuntimeError("tavily HTTP %s: %s" % (r.status_code, r.text[:120]))
+    items = [{"title": o.get("title", ""), "url": o.get("url", ""),
+              "snippet": (o.get("content") or "")[:500]}
+             for o in r.json().get("results", []) if o.get("url")]
+    if not items:
+        raise RuntimeError("tavily returned no results")
+    return items
+
+
 async def web_search(query: str, num: int = 8, gl: str = "in", hl: str = "en") -> dict:
+    """Tavily -> DuckDuckGo -> Serper (last, only while it has credits)."""
     key = "search:v2:" + hashlib.sha1(
         f"{query}|{num}|{gl}|{hl}".encode("utf-8")
     ).hexdigest()
@@ -183,19 +207,25 @@ async def web_search(query: str, num: int = 8, gl: str = "in", hl: str = "en") -
         data["cached"] = True
         return data
 
+    chain = [
+        ("tavily", lambda c: _tavily(c, query, num)),
+        ("duckduckgo", lambda c: _ddg(c, query, num)),
+        ("serper", lambda c: _serper(c, query, num, gl, hl)),
+    ]
+    errors = []
     async with httpx.AsyncClient() as client:
-        try:
-            items = await _serper(client, query, num, gl, hl)
-            res = {"ok": True, "provider": "serper", "query": query, "organic": items}
-        except Exception as e:
-            log.info("serper unavailable (%s), falling back to duckduckgo", e)
+        for name, call in chain:
             try:
-                items = await _ddg(client, query, num)
-                res = {"ok": True, "provider": "duckduckgo", "query": query, "organic": items}
-            except Exception as e2:
-                log.warning("all search providers failed: %s / %s", e, e2)
-                return {"ok": False, "provider": None, "query": query,
-                        "organic": [], "error": "serper+ddg failed"}
+                items = await call(client)
+                res = {"ok": True, "provider": name, "query": query, "organic": items}
+                break
+            except Exception as e:
+                errors.append(f"{name}: {str(e)[:80]}")
+                log.info("%s unavailable (%s), trying next", name, str(e)[:80])
+        else:
+            log.warning("all search providers failed: %s", " / ".join(errors))
+            return {"ok": False, "provider": None, "query": query,
+                    "organic": [], "error": " / ".join(errors)[:300]}
 
     await _cache_set(key, json.dumps(res))
     res["cached"] = False

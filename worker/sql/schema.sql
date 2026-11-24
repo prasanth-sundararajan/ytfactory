@@ -52,3 +52,56 @@ create table if not exists approvals (
   decided_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table videos add column if not exists yt_video_id text;
+alter table videos add column if not exists published_at timestamptz;
+alter table videos add column if not exists parent_id bigint references videos(id);
+
+create table if not exists channel_daily (
+  channel_id  int references channels(id) on delete cascade,
+  day         date not null,
+  views       bigint default 0,
+  watch_min   numeric default 0,
+  subs_gained int default 0,
+  subs_lost   int default 0,
+  primary key (channel_id, day)
+);
+
+create table if not exists metrics_daily (
+  yt_video_id  text not null,
+  day          date not null,
+  views        bigint default 0,
+  watch_min    numeric default 0,
+  avg_view_pct numeric default 0,
+  subs_gained  int default 0,
+  likes        int default 0,
+  comments     int default 0,
+  shares       int default 0,
+  primary key (yt_video_id, day)
+);
+
+create table if not exists trend_reports (
+  channel_id     int references channels(id) on delete cascade,
+  day            date not null,
+  videos_scanned int,
+  report         jsonb,
+  primary key (channel_id, day)
+);
+
+create table if not exists news_picks (
+  channel_id int references channels(id) on delete cascade,
+  day        date not null,
+  pick       jsonb,
+  used       boolean not null default false,
+  primary key (channel_id, day)
+);
+
+create table if not exists incidents (
+  id        bigserial primary key,
+  ts        timestamptz not null default now(),
+  agent     text,
+  category  text,
+  error     text,
+  action    text,
+  resolved  boolean not null default false
+);

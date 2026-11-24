@@ -22,6 +22,8 @@ import urllib.parse
 import httpx
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from app import imagegen
+
 log = logging.getLogger("visual")
 
 OPENVERSE = "https://api.openverse.org/v1/images/"
@@ -143,7 +145,8 @@ def _fit_font(draw, text: str, path: str, size: int, max_w: float,
     return ImageFont.truetype(path, min_size)
 
 
-def slide_card(spec: dict, out_path: str, w: int, h: int, lang: str = "en") -> None:
+def _slide_card_impl(spec: dict, out_path: str, w: int, h: int, lang: str = "en",
+                     transparent: bool = False) -> None:
     """A data slide (big number) or a quote card (the spoken line).
 
     The palette is deliberately mid-navy, not black: the render pass adds a
@@ -155,15 +158,19 @@ def slide_card(spec: dict, out_path: str, w: int, h: int, lang: str = "en") -> N
     ).digest()
     top = (30 + hsh[0] % 20, 44 + hsh[1] % 22, 68 + hsh[2] % 26)
     bot = (18, 26, 44)
-    img = Image.new("RGB", (w, h), top)
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0)) if transparent else Image.new("RGB", (w, h), top)
     draw = ImageDraw.Draw(img)
-    for y in range(h):
+    for y in range(0 if transparent else h):
         t = y / max(1, h - 1)
         draw.line([(0, y), (w, y)], fill=(
             int(top[0] * (1 - t) + bot[0] * t),
             int(top[1] * (1 - t) + bot[1] * t),
             int(top[2] * (1 - t) + bot[2] * t),
         ))
+    if transparent:  # glass panel so text stays readable on the moving background
+        draw.rounded_rectangle([int(w * 0.045), int(h * 0.15), int(w * 0.955), int(h * 0.80)],
+                               radius=int(h * 0.035), fill=(8, 14, 34, 120),
+                               outline=(255, 255, 255, 46), width=2)
     # Accent bar alternates sides so consecutive cards do not look identical.
     bar_w = max(6, int(w * 0.012))
     if seed % 2:
@@ -214,7 +221,44 @@ def slide_card(spec: dict, out_path: str, w: int, h: int, lang: str = "en") -> N
 
     draw.text((x, h - int(h * 0.06)), "YT Factory", font=small_f,
               fill=(120, 136, 156))
-    img.save(out_path, "JPEG", quality=92)
+    if transparent:
+        img.save(out_path, "PNG")
+    else:
+        img.save(out_path, "JPEG", quality=92)
+
+
+def slide_card(spec: dict, out_path: str, w: int, h: int, lang: str = "en",
+               fg_path: str | None = None) -> None:
+    """JPEG card (still fallback) plus, optionally, a transparent PNG foreground
+    that the renderer lays over an animated background."""
+    _slide_card_impl(spec, out_path, w, h, lang)
+    if fg_path:
+        _slide_card_impl(spec, fg_path, w, h, lang, transparent=True)
+
+
+def data_banner(spec: dict, path: str, w: int, h: int, lang: str = "en") -> None:
+    """Lay the number on a cartoon picture as a bottom banner, keeping the art visible."""
+    base = Image.open(path).convert("RGB")
+    ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    top = int(h * 0.55)
+    for y in range(top, h):  # soft dark scrim, strongest at the bottom
+        a = int(225 * ((y - top) / (h - top)) ** 0.85)
+        d.line([(0, y), (w, y)], fill=(6, 12, 30, a))
+    fp = font_path(lang)
+    big = str(spec.get("highlight") or spec.get("keyword") or spec.get("headline") or "")
+    f = _fit_font(d, big, fp, int(h * 0.19), int(w * 0.86))
+    x, y = int(w * 0.06), int(h * 0.72)
+    stroke = max(4, int(h * 0.006))
+    head = str(spec.get("headline") or "")
+    if head and head != big:
+        kf = ImageFont.truetype(fp, int(h * 0.036))
+        d.text((x, y - int(h * 0.062)), head, font=kf, fill=(255, 255, 255, 255),
+               stroke_width=3, stroke_fill=(0, 0, 0, 255))
+    d.text((x, y), big, font=f, fill=(255, 205, 60, 255),
+           stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+    base.paste(ov, (0, 0), ov)
+    base.save(path, "JPEG", quality=93)
 
 
 def _query(item: dict) -> str:
@@ -320,7 +364,14 @@ async def _download(client, url: str, out_path: str, w: int, h: int) -> bool:
         with open(tmp, "wb") as f:
             f.write(r.content)
         with Image.open(tmp) as im:
-            if im.width < 640 or im.height < 360:
+            if im.width < 1280 or im.height < 720:  # no heavy upscaling to 1080p
+                log.info("image too small: %dx%d", im.width, im.height)
+                return False
+            from PIL import ImageStat
+            g = im.convert("L").resize((640, int(640 * im.height / im.width)))
+            sharp = ImageStat.Stat(g.filter(ImageFilter.FIND_EDGES)).var[0]
+            if sharp < 40:
+                log.info("image too soft (%.0f)", sharp)
                 return False
             _fit(im, w, h).save(out_path, "JPEG", quality=92)
         os.remove(tmp)
@@ -516,7 +567,8 @@ async def build_images(prompts: list[dict], out_dir: str, w: int, h: int,
 
 
 async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
-                        lang: str = "en", concurrency: int = 3) -> list[dict]:
+                        lang: str = "en", concurrency: int = 3,
+                        channel: dict | None = None) -> list[dict]:
     """Build one visual per narration beat.
 
     A plan with type "data" becomes a slide card (no network). An "image" plan
@@ -528,6 +580,13 @@ async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
     used: set[str] = set()
     results: list[dict] = [None] * len(plans)  # type: ignore[list-item]
 
+    # Image Studio: the creative director picks scenes + formats once per video.
+    scenes: dict[int, dict] = {}
+    if imagegen.enabled():
+        scenes = await imagegen.plan_scenes(plans, channel or {"name": "Money Clear"})
+        log.info("image studio: %d AI scenes planned (%s)", len(scenes),
+                 ",".join(imagegen.providers()))
+
     async with httpx.AsyncClient(headers={"User-Agent": UA},
                                  follow_redirects=True) as client:
         key = (os.environ.get("PEXELS_API_KEY") or "").strip()
@@ -535,10 +594,30 @@ async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
         async def one(i: int, item: dict) -> None:
             async with sem:
                 path = os.path.join(out_dir, f"vis_{i:03d}.jpg")
+                sc = scenes.get(i)
+                if sc:
+                    rec = await imagegen.create(
+                        client, sc, path, w, h, "default",
+                        int(item.get("seed") or i))
+                    if rec and item.get("type") == "data":
+                        data_banner(item, path, w, h, lang)
+                    if rec:
+                        results[i] = {
+                            "path": path, "source": "ai",
+                            "type": "data" if item.get("type") == "data" else "image",
+                            "query": sc["subject"][:60], "format": sc["format"],
+                            "headline": item.get("headline", ""),
+                            "credit": "", "source_url": "",
+                        }
+                        log.info("visual %d/%d via ai/%s", i + 1, len(plans),
+                                 sc["format"])
+                        return
                 if item.get("type") == "data":
-                    slide_card(item, path, w, h, lang)
+                    slide_card(item, path, w, h, lang,
+                               fg_path=path[:-4] + "_fg.png")
                     results[i] = {
                         "path": path, "source": "slide", "type": "data",
+                        "fg": path[:-4] + "_fg.png", "seed": item.get("seed"),
                         "query": "", "headline": item.get("headline", ""),
                         "credit": "", "source_url": "",
                     }
@@ -558,10 +637,13 @@ async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
                             source = "pexels"
                             break
                 if not found:
-                    slide_card(item, path, w, h, lang)
+                    slide_card(item, path, w, h, lang,
+                               fg_path=path[:-4] + "_fg.png")
                     source = "slide"
                 results[i] = {
                     "path": path, "source": source, "type": "image",
+                    "fg": (path[:-4] + "_fg.png") if source == "slide" else "",
+                    "seed": item.get("seed"),
                     "query": query, "headline": item.get("headline", ""),
                     "credit": (found or {}).get("credit", ""),
                     "source_url": (found or {}).get("source_url", ""),
@@ -570,4 +652,9 @@ async def build_visuals(plans: list[dict], out_dir: str, w: int, h: int,
                          source, query[:40])
 
         await asyncio.gather(*(one(i, p) for i, p in enumerate(plans)))
+    # One honest disclosure line in the description, not one per image.
+    for r in results:
+        if r and r.get("source") == "ai":
+            r["credit"] = "Illustrations are AI-generated"
+            break
     return results
