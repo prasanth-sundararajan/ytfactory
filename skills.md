@@ -178,7 +178,8 @@ video was already made today or one is still waiting for approval (sends a remin
 
 - Full video: narration captions are **not** burned in; YouTube provides subtitles.
   Section headings and the disclaimer card stay. `BURN_CAPTIONS_LONG=1` restores them.
-- Shorts: captions stay burned in (most Shorts are watched muted on phones).
+- Shorts: captions are **not** burned in either; YouTube subtitles are used.
+  `BURN_CAPTIONS_SHORTS=1` restores them. The title and disclaimer card stay.
 
 ## 9. Operations (VPS)
 
