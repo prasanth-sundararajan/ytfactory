@@ -66,7 +66,7 @@ def channel(token: str | None = None) -> dict:
 
 def upload(path: str, title: str, description: str = "", privacy: str = "private",
            tags: list[str] | None = None, category_id: str = "27",
-           slug: str | None = None) -> dict:
+           slug: str | None = None, publish_at: str | None = None) -> dict:
     """Resumable upload. Returns the API response (contains the video id)."""
     if not os.path.isfile(path):
         raise YouTubeError("file not found: " + path)
@@ -91,7 +91,8 @@ def upload(path: str, title: str, description: str = "", privacy: str = "private
                 "categoryId": category_id,
             },
             "status": {
-                "privacyStatus": privacy,
+                "privacyStatus": "private" if publish_at else privacy,
+                **({"publishAt": publish_at} if publish_at else {}),
                 "selfDeclaredMadeForKids": False,
             },
         },

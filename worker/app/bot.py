@@ -8,6 +8,7 @@ from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
 from app import analytics, healer, llm, news, trends, youtube
+from app import schedule as SCH
 from app.config import CFG
 from app.db import (board, counts, get_video, list_channels, pending_videos,
                     set_published, set_video_status)
@@ -66,7 +67,7 @@ def _caption(ctx: dict) -> str:
         f"FactCheck: {fa.get('risk', '?')} \u00b7 "
         f"QC: {'pass' if qc.get('pass') else 'review'}\n"
         f"Shorts rendered: {len(shorts)}\n"
-        f"Privacy on upload: <b>{PRIVACY}</b>\n\n"
+        f"<b>{SCH.describe() if SCH.enabled() else 'Privacy on upload: ' + PRIVACY}</b>\n\n"
         f"<i>{scr.get('disclaimer_short', '')}</i>"
     )
 
@@ -100,6 +101,23 @@ async def deliver(m: Message, video_id: int, ctx: dict) -> None:
             "\u26a0\ufe0f Preview too large for Telegram (%s). "
             "The file is on the server; use /pending to retry." % str(e)[:150]
         )
+
+
+async def deliver_to_owner(b, video_id: int, ctx: dict) -> None:
+    """Send the preview + approve buttons to the owner (used by the daily job)."""
+    r = ctx["out"].get("render") or {}
+    preview = r.get("preview")
+    if not preview or not os.path.isfile(preview):
+        await b.send_message(CFG.owner_id, f"\u26a0\ufe0f Video {video_id}: no preview file.")
+        return
+    await b.send_video(CFG.owner_id, FSInputFile(preview), caption=_caption(ctx)[:1024],
+                       reply_markup=approval_keyboard(video_id), supports_streaming=True)
+    for sh in (r.get("shorts") or []):
+        if sh.get("error") or not sh.get("preview") or not os.path.isfile(sh["preview"]):
+            continue
+        await b.send_video(CFG.owner_id, FSInputFile(sh["preview"]),
+                           caption=f"Short {sh.get('index')}: {sh.get('title', '')}"[:1024],
+                           supports_streaming=True)
 
 
 async def _produce(m: Message, note: Message, slug: str) -> None:
@@ -286,6 +304,8 @@ def register(dp: Dispatcher) -> None:
             desc = scr.get("description") or ""
             if credits:
                 desc += "\n\nImages:\n" + "\n".join("- " + c for c in credits[:12])
+            main_at = SCH.main_slot() if SCH.enabled() else None
+            short_at = SCH.short_slots(main_at) if main_at else []
             res = youtube.upload(
                 master,
                 title=pkg.get("title") or scr.get("title") or "Untitled",
@@ -294,9 +314,10 @@ def register(dp: Dispatcher) -> None:
                 tags=scr.get("tags") or [],
                 category_id=str(scr.get("category_id") or 27),
                 slug=row.get("slug"),
+                publish_at=SCH.iso(main_at) if main_at else None,
             )
             set_published(vid, str(res.get("id")))
-            thumb_note = ""
+            thumb_note = ("\nGoes public: " + SCH.fmt(main_at)) if main_at else ""
             if pkg.get("thumbnail") and os.path.isfile(pkg["thumbnail"]):
                 try:
                     await asyncio.to_thread(youtube.set_thumbnail, str(res.get("id")),
@@ -315,8 +336,12 @@ def register(dp: Dispatcher) -> None:
                         youtube.upload, sh["master"], title=str(sh.get("title"))[:95],
                         description=link_desc, privacy=PRIVACY,
                         tags=sh.get("tags") or ["shorts"], category_id="27",
-                        slug=row.get("slug"))
+                        slug=row.get("slug"),
+                        publish_at=(SCH.iso(short_at[int(sh.get("index", 1)) - 1])
+                                    if len(short_at) >= int(sh.get("index", 1)) else None))
                     shorts_note += f"\nShort {sh.get('index')}: https://youtu.be/{r2.get('id')}"
+                    if len(short_at) >= int(sh.get("index", 1)):
+                        shorts_note += " (public " + SCH.fmt(short_at[int(sh.get("index", 1)) - 1]) + ")"
                 except Exception as se:
                     shorts_note += f"\nShort {sh.get('index')} failed: " + str(se)[:100]
             link = "https://youtu.be/" + str(res.get("id"))

@@ -136,6 +136,23 @@ a glass panel that fades and slides in.
   `#Shorts` **(untested against the real YouTube API)**.
 - Falls back to the old written 60 s Shorts if cutting fails.
 
+## 6b. Daily schedule (`schedule.py`)
+
+Times chosen from a 90-day scan of 293 top Indian finance videos (YouTube Data API):
+the 20:00-22:00 IST publish slot had the highest median views/day (about 11,000), ahead
+of the crowded 18:00-20:00 slot. Shorts sample was small (75); 12:00-14:00 IST led.
+
+| Step | Default (IST) | Env |
+|---|---|---|
+| News, trends, analytics | 05:35-06:00 | - |
+| Produce one video | 06:30 | `PRODUCE_TIME_IST`, pause with `DAILY_VIDEO=0` |
+| You approve in Telegram | any time | - |
+| Full video goes public | 20:00 (next day if approved after 19:40) | `PUBLISH_TIME_IST` (`now` = immediate) |
+| Shorts go public | next day 12:30 and 16:30 | `SHORT_TIMES_IST` |
+
+Uploads use YouTube scheduled publishing (private + `publishAt`). The daily job skips if a
+video was already made today or one is still waiting for approval (sends a reminder).
+
 ## 7. Telegram commands
 
 `/new [slug]` full run - `/pending` - `/show <id>` - `/status` - `/channels` -
