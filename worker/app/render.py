@@ -864,7 +864,10 @@ def assemble(video_id: int, script: dict, channel: dict, workdir: str,
     disc = str(script.get("disclaimer_short")
                or "Educational content only. Not professional advice.")
     ass_path = os.path.join(workdir, "captions.ass")
-    build_ass(ass_path, w, h, lang, blocks, headings,
+    # Narration captions are not burned into the full video: YouTube provides subtitles.
+    # Set BURN_CAPTIONS_LONG=1 to bring them back. Headings and disclaimer stay.
+    burn = os.environ.get("BURN_CAPTIONS_LONG", "0") == "1"
+    build_ass(ass_path, w, h, lang, blocks if burn else [], headings,
               disclaimer=disc, total=total,
               full_disclaimer=str(script.get("disclaimer") or ""))
 
